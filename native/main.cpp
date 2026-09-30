@@ -279,7 +279,8 @@ private:
                 GetTextExtentPoint32W(dc, entry->text.c_str(), static_cast<int>(entry->text.size()), &textSize);
                 if (oldFont) SelectObject(dc, oldFont);
                 ReleaseDC(window, dc);
-                measure->itemWidth = static_cast<UINT>(std::max(115, std::min(310, textSize.cx + (entry->submenu ? 48 : 36))));
+                measure->itemWidth = static_cast<UINT>(std::clamp(static_cast<int>(textSize.cx) +
+                    (entry->submenu ? 48 : 36), 115, 310));
                 measure->itemHeight = entry->status ? 31 : 24;
                 return TRUE;
             }
