@@ -326,7 +326,9 @@ private:
         if (key == VK_LEFT && submenuOpen_) { submenuOpen_ = false; UpdateBounds(); return; }
         if (key == VK_RIGHT && selectedMain_ >= 0 && main_[selectedMain_].kind == Kind::Devices) {
             submenuOpen_ = true;
-            selectedDevice_ = 0;
+            selectedDevice_ = -1;
+            for (size_t i = 0; i < devices_.size(); ++i)
+                if (devices_[i].enabled) { selectedDevice_ = static_cast<int>(i); break; }
             UpdateBounds();
             return;
         }
@@ -336,16 +338,22 @@ private:
             return;
         }
         if (key != VK_DOWN && key != VK_UP) return;
-        if (submenuOpen_ && selectedDevice_ >= 0) {
+        if (submenuOpen_) {
             int direction = key == VK_DOWN ? 1 : -1;
-            selectedDevice_ = (selectedDevice_ + direction + static_cast<int>(devices_.size())) % static_cast<int>(devices_.size());
+            int count = static_cast<int>(devices_.size());
+            int index = selectedDevice_;
+            for (int step = 0; step < count; ++step) {
+                index = (index + direction + count) % count;
+                if (devices_[index].enabled) { selectedDevice_ = index; break; }
+            }
         } else {
             int direction = key == VK_DOWN ? 1 : -1;
             int count = static_cast<int>(main_.size());
             int index = selectedMain_;
             for (int step = 0; step < count; ++step) {
                 index = (index + direction + count) % count;
-                if (main_[index].kind == Kind::Item || main_[index].kind == Kind::Devices) {
+                if (main_[index].enabled &&
+                    (main_[index].kind == Kind::Item || main_[index].kind == Kind::Devices)) {
                     selectedMain_ = index;
                     break;
                 }
