@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <dwmapi.h>
+#include "TrayMenu.h"
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Devices.Enumeration.h>
@@ -36,32 +37,6 @@ constexpr UINT ID_BLUETOOTH = 14;
 constexpr UINT ID_EXIT = 15;
 constexpr size_t MAX_CONNECTIONS = 4;
 
-LRESULT CALLBACK MenuCornerHook(int code, WPARAM wparam, LPARAM lparam) {
-    if (code == HCBT_ACTIVATE || code == HCBT_CREATEWND || code == HCBT_MOVESIZE) {
-        HWND popup = reinterpret_cast<HWND>(wparam);
-        wchar_t className[32]{};
-        if (GetClassNameW(popup, className, 32) && lstrcmpW(className, L"#32768") == 0) {
-            DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUNDSMALL;
-            DwmSetWindowAttribute(popup, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
-        }
-    }
-    return CallNextHookEx(nullptr, code, wparam, lparam);
-}
-
-LRESULT CALLBACK MenuShowHook(int code, WPARAM wparam, LPARAM lparam) {
-    if (code >= 0) {
-        auto* message = reinterpret_cast<CWPSTRUCT*>(lparam);
-        if (message->message == WM_SHOWWINDOW && message->wParam) {
-            wchar_t className[32]{};
-            if (GetClassNameW(message->hwnd, className, 32) && lstrcmpW(className, L"#32768") == 0) {
-                DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUNDSMALL;
-                DwmSetWindowAttribute(message->hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
-            }
-        }
-    }
-    return CallNextHookEx(nullptr, code, wparam, lparam);
-}
-
 struct DeviceEvent {
     unsigned generation;
     enum class Kind { Added, Updated, Removed, Completed } kind;
@@ -85,15 +60,6 @@ struct Settings {
     bool reconnect = false;
     bool startup = false;
     std::vector<std::wstring> lastIds;
-};
-
-struct MenuEntry {
-    std::wstring text;
-    bool checkable = false;
-    bool checked = false;
-    bool status = false;
-    bool submenu = false;
-    std::vector<int> lights;
 };
 
 std::filesystem::path ExePath() {
@@ -184,10 +150,6 @@ public:
             nullptr, nullptr, instance, this);
         if (!window_) return 1;
         callbackWindow_->store(window_);
-        menuFont_ = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
-
         NOTIFYICONDATAW icon{ sizeof(icon) };
         icon.hWnd = window_;
         icon.uID = 1;
@@ -230,8 +192,7 @@ private:
     size_t restoreIndex_ = 0;
     std::wstring status_ = L"未连接";
     std::vector<std::wstring> menuIds_;
-    std::vector<std::unique_ptr<MenuEntry>> menuEntries_;
-    HFONT menuFont_{};
+    TrayMenu trayMenu_;
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
         App* self = reinterpret_cast<App*>(GetWindowLongPtrW(window, GWLP_USERDATA));
@@ -295,28 +256,6 @@ private:
         case WM_COMMAND:
             Command(LOWORD(wparam));
             return 0;
-        case WM_MEASUREITEM: {
-            auto* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(lparam);
-            if (measure->CtlType == ODT_MENU) {
-                auto* entry = reinterpret_cast<MenuEntry*>(measure->itemData);
-                SIZE textSize{};
-                HDC dc = GetDC(window);
-                HGDIOBJ oldFont = menuFont_ ? SelectObject(dc, menuFont_) : nullptr;
-                GetTextExtentPoint32W(dc, entry->text.c_str(), static_cast<int>(entry->text.size()), &textSize);
-                if (oldFont) SelectObject(dc, oldFont);
-                ReleaseDC(window, dc);
-                measure->itemWidth = static_cast<UINT>(std::clamp(static_cast<int>(textSize.cx) +
-                    (entry->submenu ? 48 : 36), 115, 310));
-                measure->itemHeight = entry->status ? 31 : 24;
-                return TRUE;
-            }
-            break;
-        }
-        case WM_DRAWITEM: {
-            auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lparam);
-            if (draw->CtlType == ODT_MENU) { DrawMenuItem(*draw); return TRUE; }
-            break;
-        }
         case WM_DESTROY:
             Shutdown();
             PostQuitMessage(0);
@@ -443,138 +382,49 @@ private:
         SaveSettings(settings_);
     }
 
-    void AddMenuItem(HMENU menu, UINT flags, UINT_PTR id, std::wstring text,
-        bool checkable = false, bool checked = false, bool status = false, bool submenu = false) {
-        auto entry = std::make_unique<MenuEntry>();
-        entry->text = std::move(text);
-        entry->checkable = checkable;
-        entry->checked = checked;
-        entry->status = status;
-        entry->submenu = submenu;
-        if (status) {
-            for (auto const& [deviceId, ignored] : connections_) entry->lights.push_back(2);
-            for (auto const& [deviceId, ignored] : pending_) entry->lights.push_back(1);
-            for (auto const& [deviceId, ignored] : devices_)
-                if (entry->lights.size() < MAX_CONNECTIONS && !connections_.contains(deviceId) && !pending_.contains(deviceId))
-                    entry->lights.push_back(1);
-        }
-        auto* pointer = entry.get();
-        menuEntries_.push_back(std::move(entry));
-        AppendMenuW(menu, flags | MF_OWNERDRAW, id, reinterpret_cast<LPCWSTR>(pointer));
-    }
-
-    void DrawMenuItem(DRAWITEMSTRUCT const& draw) {
-        auto* entry = reinterpret_cast<MenuEntry*>(draw.itemData);
-        RECT rect = draw.rcItem;
-        bool selected = (draw.itemState & ODS_SELECTED) != 0;
-        bool disabled = (draw.itemState & ODS_DISABLED) != 0;
-        HBRUSH background = CreateSolidBrush(selected && !disabled ? RGB(235, 240, 245) : RGB(250, 250, 250));
-        FillRect(draw.hDC, &rect, background);
-        DeleteObject(background);
-        SetBkMode(draw.hDC, TRANSPARENT);
-        HGDIOBJ oldFont = menuFont_ ? SelectObject(draw.hDC, menuFont_) : nullptr;
-        if (entry->status) {
-            int diameter = 10;
-            int spacing = 16;
-            int width = diameter * 4 + spacing * 3;
-            int x = rect.left + (rect.right - rect.left - width) / 2;
-            int y = rect.top + (rect.bottom - rect.top - diameter) / 2;
-            for (size_t i = 0; i < MAX_CONNECTIONS; ++i) {
-                int state = i < entry->lights.size() ? entry->lights[i] : 0;
-                COLORREF color = state == 2 ? RGB(76, 175, 80) : state == 1 ? RGB(33, 150, 243) : RGB(228, 228, 228);
-                HBRUSH brush = CreateSolidBrush(color);
-                HGDIOBJ oldBrush = SelectObject(draw.hDC, brush);
-                HGDIOBJ oldPen = SelectObject(draw.hDC, GetStockObject(NULL_PEN));
-                Ellipse(draw.hDC, x, y, x + diameter, y + diameter);
-                SelectObject(draw.hDC, oldPen);
-                SelectObject(draw.hDC, oldBrush);
-                DeleteObject(brush);
-                x += diameter + spacing;
-            }
-            if (oldFont) SelectObject(draw.hDC, oldFont);
-            return;
-        }
-        if (entry->checkable) {
-            RECT box{ rect.left + 10, rect.top + 6, rect.left + 22, rect.top + 18 };
-            HBRUSH brush = CreateSolidBrush(entry->checked ? RGB(76, 175, 80) : RGB(250, 250, 250));
-            HGDIOBJ oldBrush = SelectObject(draw.hDC, brush);
-            HPEN pen = CreatePen(PS_SOLID, 1, entry->checked ? RGB(76, 175, 80) : RGB(200, 200, 200));
-            HGDIOBJ oldPen = SelectObject(draw.hDC, pen);
-            RoundRect(draw.hDC, box.left, box.top, box.right, box.bottom, 4, 4);
-            SelectObject(draw.hDC, oldPen);
-            SelectObject(draw.hDC, oldBrush);
-            DeleteObject(pen);
-            DeleteObject(brush);
-            if (entry->checked) {
-                HPEN check = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
-                oldPen = SelectObject(draw.hDC, check);
-                MoveToEx(draw.hDC, box.left + 2, box.top + 6, nullptr);
-                LineTo(draw.hDC, box.left + 5, box.top + 9);
-                LineTo(draw.hDC, box.left + 10, box.top + 3);
-                SelectObject(draw.hDC, oldPen);
-                DeleteObject(check);
-            }
-        }
-        SetTextColor(draw.hDC, disabled ? RGB(160, 160, 160) : RGB(45, 45, 45));
-        int textY = rect.top + (rect.bottom - rect.top - 15) / 2;
-        TextOutW(draw.hDC, rect.left + 32, textY, entry->text.c_str(), static_cast<int>(entry->text.size()));
-        if (entry->submenu) {
-            TextOutW(draw.hDC, rect.right - 16, textY, L"›", 1);
-        }
-        if (oldFont) SelectObject(draw.hDC, oldFont);
-    }
-
     void ShowMenu() {
-        HMENU menu = CreatePopupMenu();
-        HMENU devices = CreatePopupMenu();
-        MENUINFO menuInfo{ sizeof(menuInfo) };
-        menuInfo.fMask = MIM_STYLE;
-        menuInfo.dwStyle = MNS_NOCHECK;
-        SetMenuInfo(menu, &menuInfo);
-        SetMenuInfo(devices, &menuInfo);
         menuIds_.clear();
-        menuEntries_.clear();
         std::vector<std::wstring> ids;
         for (auto const& [id, ignored] : devices_) ids.push_back(id);
         std::sort(ids.begin(), ids.end(), [this](auto const& a, auto const& b) { return DisplayName(a) < DisplayName(b); });
         // Connected devices remain visible even if the watcher temporarily removes them.
         for (auto const& [id, ignored] : connections_)
             if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+        std::vector<TrayMenu::Entry> deviceEntries;
         for (auto const& id : ids) {
             UINT index = ID_DEVICE_BASE + static_cast<UINT>(menuIds_.size());
             if (index > 60000) break;
             menuIds_.push_back(id);
             bool connected = connections_.contains(id);
-            UINT flags = (connected ? MF_CHECKED : 0) |
-                (!connected && connections_.size() + pending_.size() >= MAX_CONNECTIONS ? MF_GRAYED : 0);
-            AddMenuItem(devices, flags, index, DisplayName(id), true, connected);
+            bool enabled = connected || connections_.size() + pending_.size() < MAX_CONNECTIONS;
+            deviceEntries.push_back({ TrayMenu::Kind::Item, DisplayName(id), index,
+                enabled, true, connected });
         }
-        if (menuIds_.empty()) AppendMenuW(devices, MF_STRING | MF_GRAYED, 0, L"未发现 A2DP 设备");
-        AddMenuItem(menu, MF_GRAYED, 0, L"", false, false, true);
-        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AddMenuItem(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(devices), L"设备", false, false, false, true);
-        AddMenuItem(menu, 0, ID_REFRESH, L"刷新设备");
-        AddMenuItem(menu, 0, ID_DISCONNECT_ALL, L"断开全部");
-        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AddMenuItem(menu, settings_.reconnect ? MF_CHECKED : 0, ID_RECONNECT, L"启动自动重连", true, settings_.reconnect);
+        if (deviceEntries.empty()) deviceEntries.push_back({ TrayMenu::Kind::Item,
+            L"未发现 A2DP 设备", 0, false });
+        TrayMenu::Entry status{ TrayMenu::Kind::Status };
+        for (auto const& [id, ignored] : connections_) status.lights.push_back(2);
+        for (auto const& [id, ignored] : pending_) status.lights.push_back(1);
+        for (auto const& [id, ignored] : devices_)
+            if (status.lights.size() < MAX_CONNECTIONS && !connections_.contains(id) && !pending_.contains(id))
+                status.lights.push_back(1);
         bool startup = StartupEnabled();
-        AddMenuItem(menu, startup ? MF_CHECKED : 0, ID_STARTUP, L"开机自启动", true, startup);
-        AddMenuItem(menu, 0, ID_BLUETOOTH, L"蓝牙设置");
-        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AddMenuItem(menu, 0, ID_EXIT, L"退出");
-        POINT point{};
-        GetCursorPos(&point);
-        SetForegroundWindow(window_);
-        HHOOK cornerHook = SetWindowsHookExW(WH_CBT, MenuCornerHook, nullptr, GetCurrentThreadId());
-        HHOOK showHook = SetWindowsHookExW(WH_CALLWNDPROC, MenuShowHook, nullptr, GetCurrentThreadId());
-        UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
-            point.x, point.y, 0, window_, nullptr);
-        if (showHook) UnhookWindowsHookEx(showHook);
-        if (cornerHook) UnhookWindowsHookEx(cornerHook);
-        DestroyMenu(menu);
-        menuEntries_.clear();
-        PostMessageW(window_, WM_NULL, 0, 0);
-        if (command) Command(command);
+        std::vector<TrayMenu::Entry> mainEntries;
+        mainEntries.push_back(std::move(status));
+        mainEntries.push_back({ TrayMenu::Kind::Separator });
+        mainEntries.push_back({ TrayMenu::Kind::Devices, L"设备" });
+        mainEntries.push_back({ TrayMenu::Kind::Item, L"刷新设备", ID_REFRESH });
+        mainEntries.push_back({ TrayMenu::Kind::Item, L"断开全部", ID_DISCONNECT_ALL });
+        mainEntries.push_back({ TrayMenu::Kind::Separator });
+        mainEntries.push_back({ TrayMenu::Kind::Item, L"启动自动重连", ID_RECONNECT,
+            true, true, settings_.reconnect });
+        mainEntries.push_back({ TrayMenu::Kind::Item, L"开机自启动", ID_STARTUP,
+            true, true, startup });
+        mainEntries.push_back({ TrayMenu::Kind::Item, L"蓝牙设置", ID_BLUETOOTH });
+        mainEntries.push_back({ TrayMenu::Kind::Separator });
+        mainEntries.push_back({ TrayMenu::Kind::Item, L"退出", ID_EXIT });
+        trayMenu_.Show(instance_, window_, std::move(mainEntries), std::move(deviceEntries),
+            [this](UINT command) { Command(command); });
     }
 
     void Command(UINT command) {
@@ -598,6 +448,7 @@ private:
     }
 
     void Shutdown() {
+        trayMenu_.Close();
         callbackWindow_->store(nullptr);
         KillTimer(window_, 1);
         ++generation_;
@@ -609,7 +460,6 @@ private:
         icon.hWnd = window_;
         icon.uID = 1;
         Shell_NotifyIconW(NIM_DELETE, &icon);
-        if (menuFont_) { DeleteObject(menuFont_); menuFont_ = nullptr; }
         MSG message{};
         while (PeekMessageW(&message, window_, WM_DEVICE, WM_STATE, PM_REMOVE)) {
             if (message.message == WM_DEVICE) delete reinterpret_cast<DeviceEvent*>(message.lParam);
