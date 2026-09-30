@@ -158,6 +158,9 @@ public:
             nullptr, nullptr, instance, this);
         if (!window_) return 1;
         callbackWindow_->store(window_);
+        menuFont_ = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
 
         NOTIFYICONDATAW icon{ sizeof(icon) };
         icon.hWnd = window_;
@@ -202,6 +205,7 @@ private:
     std::wstring status_ = L"未连接";
     std::vector<std::wstring> menuIds_;
     std::vector<std::unique_ptr<MenuEntry>> menuEntries_;
+    HFONT menuFont_{};
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
         App* self = reinterpret_cast<App*>(GetWindowLongPtrW(window, GWLP_USERDATA));
@@ -269,8 +273,14 @@ private:
             auto* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(lparam);
             if (measure->CtlType == ODT_MENU) {
                 auto* entry = reinterpret_cast<MenuEntry*>(measure->itemData);
-                measure->itemWidth = static_cast<UINT>(std::max<size_t>(210, entry->text.size() * 9 + 65));
-                measure->itemHeight = entry->status ? 34 : 30;
+                SIZE textSize{};
+                HDC dc = GetDC(window);
+                HGDIOBJ oldFont = menuFont_ ? SelectObject(dc, menuFont_) : nullptr;
+                GetTextExtentPoint32W(dc, entry->text.c_str(), static_cast<int>(entry->text.size()), &textSize);
+                if (oldFont) SelectObject(dc, oldFont);
+                ReleaseDC(window, dc);
+                measure->itemWidth = static_cast<UINT>(std::max(115, std::min(310, textSize.cx + (entry->submenu ? 48 : 36))));
+                measure->itemHeight = entry->status ? 31 : 24;
                 return TRUE;
             }
             break;
@@ -435,6 +445,7 @@ private:
         FillRect(draw.hDC, &rect, background);
         DeleteObject(background);
         SetBkMode(draw.hDC, TRANSPARENT);
+        HGDIOBJ oldFont = menuFont_ ? SelectObject(draw.hDC, menuFont_) : nullptr;
         if (entry->status) {
             int diameter = 10;
             int spacing = 16;
@@ -453,10 +464,11 @@ private:
                 DeleteObject(brush);
                 x += diameter + spacing;
             }
+            if (oldFont) SelectObject(draw.hDC, oldFont);
             return;
         }
         if (entry->checkable) {
-            RECT box{ rect.left + 10, rect.top + 9, rect.left + 22, rect.top + 21 };
+            RECT box{ rect.left + 10, rect.top + 6, rect.left + 22, rect.top + 18 };
             HBRUSH brush = CreateSolidBrush(entry->checked ? RGB(76, 175, 80) : RGB(250, 250, 250));
             HGDIOBJ oldBrush = SelectObject(draw.hDC, brush);
             HPEN pen = CreatePen(PS_SOLID, 1, entry->checked ? RGB(76, 175, 80) : RGB(200, 200, 200));
@@ -477,12 +489,12 @@ private:
             }
         }
         SetTextColor(draw.hDC, disabled ? RGB(160, 160, 160) : RGB(45, 45, 45));
-        RECT textRect{ rect.left + 33, rect.top, rect.right - 15, rect.bottom };
-        DrawTextW(draw.hDC, entry->text.c_str(), -1, &textRect, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+        int textY = rect.top + (rect.bottom - rect.top - 15) / 2;
+        TextOutW(draw.hDC, rect.left + 32, textY, entry->text.c_str(), static_cast<int>(entry->text.size()));
         if (entry->submenu) {
-            RECT arrowRect{ rect.right - 17, rect.top, rect.right - 5, rect.bottom };
-            DrawTextW(draw.hDC, L"›", -1, &arrowRect, DT_SINGLELINE | DT_VCENTER);
+            TextOutW(draw.hDC, rect.right - 16, textY, L"›", 1);
         }
+        if (oldFont) SelectObject(draw.hDC, oldFont);
     }
 
     void ShowMenu() {
@@ -561,6 +573,7 @@ private:
         icon.hWnd = window_;
         icon.uID = 1;
         Shell_NotifyIconW(NIM_DELETE, &icon);
+        if (menuFont_) { DeleteObject(menuFont_); menuFont_ = nullptr; }
         MSG message{};
         while (PeekMessageW(&message, window_, WM_DEVICE, WM_STATE, PM_REMOVE)) {
             if (message.message == WM_DEVICE) delete reinterpret_cast<DeviceEvent*>(message.lParam);
