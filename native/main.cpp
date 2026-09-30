@@ -153,16 +153,10 @@ public:
         klass.lpfnWndProc = WindowProc;
         klass.hInstance = instance;
         klass.lpszClassName = L"EchoBridgeNativeWindow";
-        if (!RegisterClassExW(&klass)) {
-            MessageBoxW(nullptr, L"无法注册程序窗口类。", L"EchoBridge", MB_OK | MB_ICONERROR);
-            return 1;
-        }
+        if (!RegisterClassExW(&klass)) return 1;
         window_ = CreateWindowExW(0, klass.lpszClassName, L"EchoBridge", WS_OVERLAPPED, 0, 0, 0, 0,
             nullptr, nullptr, instance, this);
-        if (!window_) {
-            MessageBoxW(nullptr, L"无法创建托盘窗口。", L"EchoBridge", MB_OK | MB_ICONERROR);
-            return 1;
-        }
+        if (!window_) return 1;
         callbackWindow_->store(window_);
 
         NOTIFYICONDATAW icon{ sizeof(icon) };
