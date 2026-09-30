@@ -36,6 +36,18 @@ constexpr UINT ID_BLUETOOTH = 14;
 constexpr UINT ID_EXIT = 15;
 constexpr size_t MAX_CONNECTIONS = 4;
 
+LRESULT CALLBACK MenuCornerHook(int code, WPARAM wparam, LPARAM lparam) {
+    if (code == HCBT_ACTIVATE) {
+        HWND popup = reinterpret_cast<HWND>(wparam);
+        wchar_t className[32]{};
+        if (GetClassNameW(popup, className, 32) && lstrcmpW(className, L"#32768") == 0) {
+            DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUNDSMALL;
+            DwmSetWindowAttribute(popup, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+        }
+    }
+    return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
 struct DeviceEvent {
     unsigned generation;
     enum class Kind { Added, Updated, Removed, Completed } kind;
@@ -501,6 +513,11 @@ private:
     void ShowMenu() {
         HMENU menu = CreatePopupMenu();
         HMENU devices = CreatePopupMenu();
+        MENUINFO menuInfo{ sizeof(menuInfo) };
+        menuInfo.fMask = MIM_STYLE;
+        menuInfo.dwStyle = MNS_NOCHECK;
+        SetMenuInfo(menu, &menuInfo);
+        SetMenuInfo(devices, &menuInfo);
         menuIds_.clear();
         menuEntries_.clear();
         std::vector<std::wstring> ids;
@@ -534,8 +551,10 @@ private:
         POINT point{};
         GetCursorPos(&point);
         SetForegroundWindow(window_);
+        HHOOK cornerHook = SetWindowsHookExW(WH_CBT, MenuCornerHook, nullptr, GetCurrentThreadId());
         UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
             point.x, point.y, 0, window_, nullptr);
+        if (cornerHook) UnhookWindowsHookEx(cornerHook);
         DestroyMenu(menu);
         menuEntries_.clear();
         PostMessageW(window_, WM_NULL, 0, 0);
