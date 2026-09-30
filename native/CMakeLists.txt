@@ -10,6 +10,8 @@ target_compile_features(EchoBridgeNative PRIVATE cxx_std_20)
 target_compile_definitions(EchoBridgeNative PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(EchoBridgeNative PRIVATE /W4 /EHsc /utf-8)
 target_link_libraries(EchoBridgeNative PRIVATE windowsapp shell32 user32 gdi32 dwmapi ole32)
+# The .rc already embeds the app manifest; prevent the linker from generating a second one.
+target_link_options(EchoBridgeNative PRIVATE /MANIFEST:NO)
 
 # Desktop C++/WinRT projection headers ship with the Windows SDK.
 file(GLOB WINRT_HEADERS "${CMAKE_SYSTEM_PREFIX_PATH}/Include/*/cppwinrt/winrt/base.h"
