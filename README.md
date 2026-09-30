@@ -4,6 +4,8 @@
 
 > 无界面、零配置、开机自启——把你的电脑变成一台蓝牙音箱。
 
+仓库并列维护两个实现：`native/` 是原生 C++/WinRT 版，目标为免安装 .NET 的单 EXE；`csharp/` 保留原 C# + WinForms 版。两版共用根目录的 `Assets/` 图标，配置字段保持一致。
+
 ---
 
 ## 功能特性
@@ -12,7 +14,7 @@
 - 🖱 **极简托盘操作**：右键系统托盘图标，一键连接 / 断开蓝牙设备
 - 🔄 **开机自动重连**：可配置在程序启动时自动恢复上次连接的设备
 - 🚀 **开机自启动**：支持注册到 Windows 启动项，开机无感运行
-- 🔊 **多设备并联**：最多同时连接 4 台蓝牙设备，实时状态指示灯
+- 🔊 **多设备并联**：最多同时连接 4 台蓝牙设备；列表显示全部已发现设备，连接满额时须先断开一台才能连接其他设备
 - ♻️ **物理刷新扫描**：强制重新扫描蓝牙设备，解决设备列表不更新的问题
 - 🪶 **极低资源占用**：事件驱动架构，待机时 CPU 接近 0%，内存约 25 MB
 - 🧹 **绿色无残留**：配置文件仅 `EchoBridge.json` 一个文件，无注册表垃圾，无日志磁盘写入
@@ -24,10 +26,11 @@
 | 项目 | 要求 |
 | :--- | :--- |
 | 操作系统 | Windows 10 版本 2004（Build 19041）或更高版本 |
-| 运行环境 | [.NET 10.0 桌面运行时（x64）](https://dotnet.microsoft.com/download/dotnet/10.0) |
+| 原生版运行环境 | Windows 自带的系统组件，无需安装 .NET |
+| C# 版运行环境 | [.NET 10.0 桌面运行时（x64）](https://dotnet.microsoft.com/download/dotnet/10.0) |
 | 蓝牙 | 支持 A2DP 协议的蓝牙适配器 |
 
-> **注意**：运行时仅需在用户电脑上安装一次，若已安装则无需任何额外操作。
+> 原生版目前需要通过 Windows C++ 工具链构建并完成蓝牙设备实测后再发布；现有 C# 发布包仍需 .NET 10 桌面运行时。
 
 ---
 
@@ -39,7 +42,7 @@
 
 ### 2. 运行 EchoBridge
 
-下载 `EchoBridge.exe`，**直接双击运行**，程序将以托盘图标的形式静默启动，不会弹出任何窗口。
+下载所选实现的 `EchoBridge.exe`，**直接双击运行**，程序将以托盘图标的形式静默启动，不会弹出任何窗口。原生版无需另装 .NET；不要同时运行两版连接同一蓝牙设备。
 
 ### 3. 连接设备
 
@@ -57,7 +60,7 @@
 ┌──────────────────────────────┐
 │  ● ● ○ ○   ← 设备状态指示灯  │
 ├──────────────────────────────┤
-│  设备          ▶             │  → 展开已配对的 A2DP 设备列表，勾选即连接
+│  设备          ▶             │  → 展开已配对的 A2DP 设备列表；连接满 4 台时其他设备暂不可选
 │  刷新设备                     │  → 强制物理重新扫描蓝牙设备
 │  断开全部                     │  → 断开所有当前活跃的蓝牙连接
 ├──────────────────────────────┤
@@ -78,7 +81,7 @@
 
 ## 配置文件
 
-程序运行后会在 **EXE 同级目录**自动生成 `EchoBridge.json`，保存你的使用偏好：
+两版程序运行后都会在 **EXE 同级目录**生成 `EchoBridge.json`，保存相同格式的使用偏好：
 
 ```json
 {
@@ -96,21 +99,33 @@
 
 ## 从源码构建
 
-**环境要求：**
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- Windows 10 Build 19041 或更高版本
+**目录结构：**
 
-**构建发布包（轻量单文件）：**
-
-```powershell
-# 一键构建、签名、打包至 bin/Release/v1.0.0/
-powershell -ExecutionPolicy Bypass -File .\build-and-sign.ps1
+```text
+Assets/              两版共用的图标
+csharp/              原 C# + WinForms 实现
+native/              原生 C++/WinRT 实现
+README.md            共用说明
 ```
 
-或手动执行：
+**原生版：**构建机需要 Visual Studio 2022 的 C++ 桌面工作负载、Windows 10/11 SDK 和 CMake。运行机只需 Windows 10 Build 19041 或更新版本。
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true
+pwsh -File .\native\build.ps1
+```
+
+产物位于 `native/build/out/Release/EchoBridge.exe`。构建使用静态 C++ 运行库，运行机无需安装 .NET 桌面运行时。
+
+**C# 版：**构建机需要 .NET 10 SDK；运行机需要 .NET 10 桌面运行时。
+
+```powershell
+pwsh -File .\csharp\build-and-sign.ps1
+```
+
+手动发布 C# 版：
+
+```powershell
+dotnet publish .\csharp\EchoBridge.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true
 ```
 
 ---
@@ -134,7 +149,7 @@ A：几乎零消耗。EchoBridge 采用纯事件驱动架构，音频数据传�
 ## 致谢
 
 本项目的核心思路受到 [AudioPlaybackConnector](https://github.com/ysc3839/AudioPlaybackConnector)（作者：[ysc3839](https://github.com/ysc3839)，MIT License）的启发。  
-EchoBridge 是基于相同的 Windows WinRT `AudioPlaybackConnection` API 思路，以 C# + WinForms 独立重新实现的版本，未复用任何原项目代码。
+EchoBridge 的 C# + WinForms 版与原生 C++/WinRT 版都使用 Windows WinRT `AudioPlaybackConnection` API，未复用原项目代码。
 
 ---
 

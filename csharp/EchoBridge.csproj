@@ -9,9 +9,9 @@
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <AssemblyName>EchoBridge</AssemblyName>
     <RootNamespace>EchoBridge</RootNamespace>
-    <ApplicationIcon>Assets/EchoBridge.ico</ApplicationIcon>
+    <ApplicationIcon>../Assets/EchoBridge.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
-    <EmbeddedResource Include="Assets/EchoBridge.ico" />
+    <EmbeddedResource Include="../Assets/EchoBridge.ico" LogicalName="EchoBridge.Assets.EchoBridge.ico" />
   </ItemGroup>
 </Project>

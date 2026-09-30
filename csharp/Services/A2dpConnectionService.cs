@@ -6,6 +6,7 @@ namespace EchoBridge;
 
 internal sealed class A2dpConnectionService : IDisposable
 {
+    public const int MaxConnections = 4;
     private readonly SynchronizationContext _uiContext;
     private readonly Dictionary<string, AudioDeviceItem> _devices = [];
     private readonly Dictionary<string, AudioPlaybackConnection> _connections = [];
@@ -24,6 +25,7 @@ internal sealed class A2dpConnectionService : IDisposable
     public string StatusText { get; private set; } = "未连接";
     public IReadOnlyCollection<AudioDeviceItem> Devices => _devices.Values.OrderBy(device => device.Name).ToArray();
     public IReadOnlyCollection<string> ConnectedDeviceIds => _connections.Keys.ToArray();
+    public bool CanConnect => _connections.Count < MaxConnections;
 
     public void StartScanning()
     {
@@ -56,6 +58,13 @@ internal sealed class A2dpConnectionService : IDisposable
     {
         if (_connections.ContainsKey(device.Id))
         {
+            return;
+        }
+
+        // 连接对象在首个 await 前加入字典，正在建立的连接也占用名额。
+        if (!CanConnect)
+        {
+            SetState(ConnectionState.Failed, $"最多同时连接 {MaxConnections} 台设备");
             return;
         }
 

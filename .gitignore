@@ -7,3 +7,5 @@ obj/
 data/
 config/
 EchoBridge.json
+native/build/
+native/out/

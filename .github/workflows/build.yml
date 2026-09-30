@@ -1,0 +1,23 @@
+name: 构建双实现
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: 构建 C# 版
+        shell: pwsh
+        run: dotnet build csharp/EchoBridge.csproj -c Release
+      - name: 配置原生版
+        shell: pwsh
+        run: cmake -S native -B native/build -G 'Visual Studio 17 2022' -A x64
+      - name: 构建原生版
+        shell: pwsh
+        run: cmake --build native/build --config Release

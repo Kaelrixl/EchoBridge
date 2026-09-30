@@ -1,5 +1,11 @@
-# Build and Sign script targeting version folder E:\ToolProjects\EchoBridge\bin\Release\v1.0.0
+# Build and Sign script targeting csharp/bin/Release/v1.0.0
 # All comments and messages are in ASCII to prevent Windows PowerShell encoding parse crashes
+
+$dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+if (-not $dotnet -or -not (dotnet --list-sdks)) {
+    Write-Error "A .NET SDK is required to publish EchoBridge."
+    exit 1
+}
 
 Write-Host ">>> Step 1: Stopping running EchoBridge processes..." -ForegroundColor Cyan
 $process = Get-Process -Name "EchoBridge" -ErrorAction SilentlyContinue
@@ -10,17 +16,17 @@ if ($process) {
 
 Write-Host ">>> Step 2: Running dotnet publish (Lightweight / Framework-Dependent)..." -ForegroundColor Cyan
 
-# Establish target output directory
-$targetDir = "E:\ToolProjects\EchoBridge\bin\Release\v1.0.0"
-if (Test-Path $targetDir) {
-    Remove-Item -Path $targetDir -Recurse -Force | Out-Null
-}
-New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-
-$publishDir = "E:\ToolProjects\EchoBridge\bin\Release\net10.0-windows10.0.19041.0\win-x64\publish"
+# Resolve all paths from the script, regardless of the caller's working directory.
+$projectFile = Join-Path $PSScriptRoot "EchoBridge.csproj"
+$targetDir = Join-Path $PSScriptRoot "bin\Release\v1.0.0"
+$publishDir = Join-Path $PSScriptRoot "bin\Release\net10.0-windows10.0.19041.0\win-x64\publish"
 
 # Lightweight Single File (Framework-Dependent): ~24MB, requires .NET 10 Desktop Runtime on target machine
-dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true
+dotnet publish $projectFile -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Build failed: dotnet publish returned $LASTEXITCODE."
+    exit 1
+}
 
 if (-not (Test-Path "$publishDir\EchoBridge.exe")) {
     Write-Error "Build failed: EchoBridge.exe not found in publish directory!"
@@ -28,10 +34,10 @@ if (-not (Test-Path "$publishDir\EchoBridge.exe")) {
 }
 
 # Copy only the EXE, deliberately exclude PDB (debug symbols - not needed for release, leaks source structure)
+New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
 Copy-Item -Path "$publishDir\EchoBridge.exe" -Destination "$targetDir\EchoBridge.exe" -Force
 
-# Clean intermediate publish folder
-Remove-Item -Path "E:\ToolProjects\EchoBridge\bin\Release\net10.0-windows10.0.19041.0\win-x64" -Recurse -Force -ErrorAction SilentlyContinue
+# Keep intermediate output for diagnostics and incremental builds.
 
 Write-Host ">>> Step 3: Applying Local Code Signature..." -ForegroundColor Cyan
 try {
@@ -57,7 +63,7 @@ try {
     }
 
     $exePath = Join-Path $targetDir "EchoBridge.exe"
-    Write-Host "Signing EchoBridge.exe in bin/Release/v1.0.0..." -ForegroundColor Cyan
+    Write-Host "Signing EchoBridge.exe in csharp/bin/Release/v1.0.0..." -ForegroundColor Cyan
     $signResult = Set-AuthenticodeSignature -FilePath $exePath -Certificate $cert -ErrorAction Stop
     if ($signResult.Status -eq "Valid") {
         Write-Host "Success: EchoBridge.exe code-signed!" -ForegroundColor Green

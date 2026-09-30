@@ -106,15 +106,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         _devicesRoot.DropDownItems.Clear();
 
-        // 强行限制：最多读取 4 个已配对设备
-        var devices = _connectionService.Devices.Take(4).ToArray();
+        var devices = _connectionService.Devices.ToArray();
+        // 指示灯优先展示已连接设备，剩余位置展示其他已发现设备。
+        var indicatorDevices = devices.OrderByDescending(device =>
+            _connectionService.ConnectedDeviceIds.Contains(device.Id)).Take(A2dpConnectionService.MaxConnections).ToArray();
 
         // 更新设备状态指示列表
         for (int i = 0; i < 4; i++)
         {
-            if (i < devices.Length)
+            if (i < indicatorDevices.Length)
             {
-                var device = devices[i];
+                var device = indicatorDevices[i];
                 var connected = _connectionService.ConnectedDeviceIds.Contains(device.Id);
                 DeviceStatuses[i] = connected ? 2 : 1; // 2 = 已连接（绿），1 = 已配对但未连接（蓝）
             }
@@ -135,7 +137,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             var connected = _connectionService.ConnectedDeviceIds.Contains(device.Id);
             var item = new ToolStripMenuItem(device.ToString())
             {
-                Checked = connected
+                Checked = connected,
+                Enabled = connected || _connectionService.CanConnect
             };
 
             item.Click += async (_, _) =>
