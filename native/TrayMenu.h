@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <dwmapi.h>
+#include <gdiplus.h>
 #include <algorithm>
 #include <functional>
 #include <string>
@@ -24,7 +25,11 @@ public:
         std::vector<int> lights;
     };
 
-    ~TrayMenu() { Close(); if (font_) DeleteObject(font_); }
+    ~TrayMenu() {
+        Close();
+        if (font_) DeleteObject(font_);
+        if (gdiplusToken_) Gdiplus::GdiplusShutdown(gdiplusToken_);
+    }
 
     void Show(HINSTANCE instance, HWND owner, std::vector<Entry> main,
         std::vector<Entry> devices, std::function<void(UINT)> onCommand) {
@@ -37,6 +42,10 @@ public:
         selectedMain_ = -1;
         selectedDevice_ = -1;
         submenuOpen_ = false;
+        if (!gdiplusToken_) {
+            Gdiplus::GdiplusStartupInput input;
+            Gdiplus::GdiplusStartup(&gdiplusToken_, &input, nullptr);
+        }
         if (!font_) {
             HDC screen = GetDC(nullptr);
             int dpi = GetDeviceCaps(screen, LOGPIXELSY);
@@ -89,6 +98,7 @@ private:
     HWND owner_{};
     HWND window_{};
     HFONT font_{};
+    ULONG_PTR gdiplusToken_{};
     std::vector<Entry> main_;
     std::vector<Entry> devices_;
     std::function<void(UINT)> onCommand_;
@@ -176,37 +186,45 @@ private:
         DeleteObject(brush);
     }
 
-    static void Outline(HDC dc, RECT area, COLORREF color, int radius) {
-        HPEN pen = CreatePen(PS_SOLID, 1, color);
-        HGDIOBJ oldPen = SelectObject(dc, pen);
-        HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-        RoundRect(dc, area.left, area.top, area.right, area.bottom, radius, radius);
-        SelectObject(dc, oldBrush);
-        SelectObject(dc, oldPen);
-        DeleteObject(pen);
+    static void RoundedPath(Gdiplus::GraphicsPath& path, float x, float y,
+        float width, float height, float radius) {
+        float diameter = radius * 2;
+        path.AddArc(x, y, diameter, diameter, 180, 90);
+        path.AddArc(x + width - diameter, y, diameter, diameter, 270, 90);
+        path.AddArc(x + width - diameter, y + height - diameter, diameter, diameter, 0, 90);
+        path.AddArc(x, y + height - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+    }
+
+    static Gdiplus::Color Color(COLORREF color) {
+        return Gdiplus::Color(255, GetRValue(color), GetGValue(color), GetBValue(color));
+    }
+
+    static void Outline(HDC dc, RECT area, COLORREF color, float radius) {
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        Gdiplus::Pen pen(Color(color), 1.0f);
+        Gdiplus::GraphicsPath path;
+        RoundedPath(path, static_cast<float>(area.left), static_cast<float>(area.top),
+            static_cast<float>(area.right - area.left - 1),
+            static_cast<float>(area.bottom - area.top - 1), radius);
+        graphics.DrawPath(&pen, &path);
     }
 
     void DrawCheck(HDC dc, int x, int y, bool checked) {
-        RECT box{ x, y, x + 12, y + 12 };
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        Gdiplus::GraphicsPath path;
+        RoundedPath(path, static_cast<float>(x), static_cast<float>(y), 12.0f, 12.0f, 2.0f);
         if (checked) {
-            HBRUSH brush = CreateSolidBrush(RGB(76, 175, 80));
-            HPEN pen = CreatePen(PS_SOLID, 1, RGB(76, 175, 80));
-            HGDIOBJ oldBrush = SelectObject(dc, brush);
-            HGDIOBJ oldPen = SelectObject(dc, pen);
-            RoundRect(dc, box.left, box.top, box.right, box.bottom, 5, 5);
-            SelectObject(dc, oldPen);
-            SelectObject(dc, oldBrush);
-            DeleteObject(pen);
-            DeleteObject(brush);
-            pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
-            oldPen = SelectObject(dc, pen);
-            MoveToEx(dc, x + 2, y + 6, nullptr);
-            LineTo(dc, x + 5, y + 9);
-            LineTo(dc, x + 10, y + 3);
-            SelectObject(dc, oldPen);
-            DeleteObject(pen);
+            Gdiplus::SolidBrush brush(Color(RGB(76, 175, 80)));
+            graphics.FillPath(&brush, &path);
+            Gdiplus::Pen check(Gdiplus::Color(255, 255, 255, 255), 1.5f);
+            graphics.DrawLine(&check, x + 3.2f, y + 6.0f, x + 5.2f, y + 8.0f);
+            graphics.DrawLine(&check, x + 5.2f, y + 8.0f, x + 9.7f, y + 3.5f);
         } else {
-            Outline(dc, box, RGB(200, 200, 200), 5);
+            Gdiplus::Pen pen(Color(RGB(200, 200, 200)), 1.0f);
+            graphics.DrawPath(&pen, &path);
         }
     }
 
@@ -230,16 +248,14 @@ private:
                 DeleteObject(pen);
             } else if (entry.kind == Kind::Status) {
                 int dotX = x + (width - 88) / 2;
+                Gdiplus::Graphics graphics(dc);
+                graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
                 for (int dot = 0; dot < 4; ++dot) {
                     int state = dot < static_cast<int>(entry.lights.size()) ? entry.lights[dot] : 0;
                     COLORREF color = state == 2 ? RGB(76, 175, 80) : state == 1 ? RGB(33, 150, 243) : RGB(228, 228, 228);
-                    HBRUSH brush = CreateSolidBrush(color);
-                    HGDIOBJ oldBrush = SelectObject(dc, brush);
-                    HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
-                    Ellipse(dc, dotX, top + (row - 10) / 2, dotX + 10, top + (row - 10) / 2 + 10);
-                    SelectObject(dc, oldPen);
-                    SelectObject(dc, oldBrush);
-                    DeleteObject(brush);
+                    Gdiplus::SolidBrush brush(Color(color));
+                    graphics.FillEllipse(&brush, static_cast<float>(dotX),
+                        static_cast<float>(top) + (row - 10) / 2.0f, 10.0f, 10.0f);
                     dotX += 26;
                 }
             } else {
@@ -249,9 +265,13 @@ private:
                 }
                 if (entry.checkable) DrawCheck(dc, x + 10, top + (row - 12) / 2 - 2, entry.checked);
                 SetTextColor(dc, entry.enabled ? RGB(45, 45, 45) : RGB(160, 160, 160));
-                TextOutW(dc, x + 34, top + (row - 15) / 2, entry.text.c_str(), static_cast<int>(entry.text.size()));
+                RECT textRect{ x + 34, top, x + width - 18, top + row };
+                DrawTextW(dc, entry.text.c_str(), static_cast<int>(entry.text.size()),
+                    &textRect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT);
                 if (entry.kind == Kind::Devices) {
-                    TextOutW(dc, x + width - 15, top + (row - 15) / 2, L"›", 1);
+                    RECT arrowRect{ x + width - 15, top, x + width - 2, top + row };
+                    DrawTextW(dc, L"›", 1, &arrowRect,
+                        DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT);
                 }
             }
             top += row;

@@ -9,7 +9,7 @@ add_executable(EchoBridgeNative WIN32 main.cpp EchoBridge.rc)
 target_compile_features(EchoBridgeNative PRIVATE cxx_std_20)
 target_compile_definitions(EchoBridgeNative PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(EchoBridgeNative PRIVATE /W4 /EHsc /utf-8)
-target_link_libraries(EchoBridgeNative PRIVATE windowsapp shell32 user32 gdi32 dwmapi ole32)
+target_link_libraries(EchoBridgeNative PRIVATE windowsapp shell32 user32 gdi32 gdiplus dwmapi ole32)
 # The .rc already embeds the app manifest; prevent the linker from generating a second one.
 target_link_options(EchoBridgeNative PRIVATE /MANIFEST:NO)
 
