@@ -52,10 +52,13 @@ public:
         MONITORINFO monitor{ sizeof(monitor) };
         GetMonitorInfoW(MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST), &monitor);
         RECT work = monitor.rcWork;
-        rootX_ = std::clamp(cursor.x, work.left, work.right - rootWidth_);
+        rootX_ = std::clamp(static_cast<int>(cursor.x), static_cast<int>(work.left),
+            static_cast<int>(work.right) - rootWidth_);
         rootY_ = cursor.y - RootHeight();
-        if (rootY_ < work.top) rootY_ = std::min(cursor.y, work.bottom - RootHeight());
-        rootY_ = std::clamp(rootY_, work.top, work.bottom - RootHeight());
+        if (rootY_ < work.top) rootY_ = std::min(static_cast<int>(cursor.y),
+            static_cast<int>(work.bottom) - RootHeight());
+        rootY_ = std::clamp(rootY_, static_cast<int>(work.top),
+            static_cast<int>(work.bottom) - RootHeight());
         submenuLeft_ = rootX_ + rootWidth_ + SubmenuWidth() > work.right;
         window_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             L"EchoBridgeNativeTrayMenu", L"", WS_POPUP,
