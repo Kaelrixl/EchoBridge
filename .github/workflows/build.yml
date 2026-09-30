@@ -21,3 +21,14 @@ jobs:
       - name: 构建原生版
         shell: pwsh
         run: cmake --build native/build --config Release
+      - name: 显示原生版体积
+        shell: pwsh
+        run: |
+          $file = Get-Item native/build/out/Release/EchoBridge.exe
+          Write-Host ('EXE 大小：{0:N2} MB' -f ($file.Length / 1MB))
+      - name: 上传原生版 EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: EchoBridge-native-win-x64
+          path: native/build/out/Release/EchoBridge.exe
+          if-no-files-found: error
