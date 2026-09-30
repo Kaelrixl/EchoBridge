@@ -37,12 +37,26 @@ constexpr UINT ID_EXIT = 15;
 constexpr size_t MAX_CONNECTIONS = 4;
 
 LRESULT CALLBACK MenuCornerHook(int code, WPARAM wparam, LPARAM lparam) {
-    if (code == HCBT_ACTIVATE) {
+    if (code == HCBT_ACTIVATE || code == HCBT_CREATEWND || code == HCBT_MOVESIZE) {
         HWND popup = reinterpret_cast<HWND>(wparam);
         wchar_t className[32]{};
         if (GetClassNameW(popup, className, 32) && lstrcmpW(className, L"#32768") == 0) {
             DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUNDSMALL;
             DwmSetWindowAttribute(popup, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+        }
+    }
+    return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
+LRESULT CALLBACK MenuShowHook(int code, WPARAM wparam, LPARAM lparam) {
+    if (code >= 0) {
+        auto* message = reinterpret_cast<CWPSTRUCT*>(lparam);
+        if (message->message == WM_SHOWWINDOW && message->wParam) {
+            wchar_t className[32]{};
+            if (GetClassNameW(message->hwnd, className, 32) && lstrcmpW(className, L"#32768") == 0) {
+                DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUNDSMALL;
+                DwmSetWindowAttribute(message->hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+            }
         }
     }
     return CallNextHookEx(nullptr, code, wparam, lparam);
@@ -552,8 +566,10 @@ private:
         GetCursorPos(&point);
         SetForegroundWindow(window_);
         HHOOK cornerHook = SetWindowsHookExW(WH_CBT, MenuCornerHook, nullptr, GetCurrentThreadId());
+        HHOOK showHook = SetWindowsHookExW(WH_CALLWNDPROC, MenuShowHook, nullptr, GetCurrentThreadId());
         UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
             point.x, point.y, 0, window_, nullptr);
+        if (showHook) UnhookWindowsHookEx(showHook);
         if (cornerHook) UnhookWindowsHookEx(cornerHook);
         DestroyMenu(menu);
         menuEntries_.clear();
