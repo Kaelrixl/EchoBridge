@@ -153,10 +153,16 @@ public:
         klass.lpfnWndProc = WindowProc;
         klass.hInstance = instance;
         klass.lpszClassName = L"EchoBridgeNativeWindow";
-        if (!RegisterClassExW(&klass)) return 1;
+        if (!RegisterClassExW(&klass)) {
+            MessageBoxW(nullptr, L"无法注册程序窗口类。", L"EchoBridge", MB_OK | MB_ICONERROR);
+            return 1;
+        }
         window_ = CreateWindowExW(0, klass.lpszClassName, L"EchoBridge", WS_OVERLAPPED, 0, 0, 0, 0,
             nullptr, nullptr, instance, this);
-        if (!window_) return 1;
+        if (!window_) {
+            MessageBoxW(nullptr, L"无法创建托盘窗口。", L"EchoBridge", MB_OK | MB_ICONERROR);
+            return 1;
+        }
         callbackWindow_->store(window_);
 
         NOTIFYICONDATAW icon{ sizeof(icon) };
@@ -208,12 +214,13 @@ private:
         if (message == WM_NCCREATE) {
             self = static_cast<App*>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams);
             SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            return TRUE;
         }
         if (!self) return DefWindowProcW(window, message, wparam, lparam);
-        return self->Handle(message, wparam, lparam);
+        return self->Handle(window, message, wparam, lparam);
     }
 
-    LRESULT Handle(UINT message, WPARAM wparam, LPARAM lparam) {
+    LRESULT Handle(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
         switch (message) {
         case WM_TRAY:
             if (LOWORD(lparam) == WM_CONTEXTMENU || LOWORD(lparam) == WM_RBUTTONUP) ShowMenu();
@@ -284,7 +291,7 @@ private:
             PostQuitMessage(0);
             return 0;
         }
-        return DefWindowProcW(window_, message, wparam, lparam);
+        return DefWindowProcW(window, message, wparam, lparam);
     }
 
     std::wstring DisplayName(std::wstring const& id) const {
