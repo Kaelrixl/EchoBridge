@@ -2,6 +2,7 @@
 #include <shellapi.h>
 #include <dwmapi.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Devices.Enumeration.h>
 #include <winrt/Windows.Media.Audio.h>
 #include <winrt/Windows.Data.Json.h>
@@ -316,7 +317,7 @@ private:
             watcher_.Removed([callbackWindow, current](DeviceWatcher const&, DeviceInformationUpdate const& info) {
                 PostOwned(callbackWindow->load(), WM_DEVICE, new DeviceEvent{ current, DeviceEvent::Kind::Removed, info.Id().c_str(), L"" });
             });
-            watcher_.EnumerationCompleted([callbackWindow, current](DeviceWatcher const&, IInspectable const&) {
+            watcher_.EnumerationCompleted([callbackWindow, current](DeviceWatcher const&, winrt::Windows::Foundation::IInspectable const&) {
                 PostOwned(callbackWindow->load(), WM_DEVICE, new DeviceEvent{ current, DeviceEvent::Kind::Completed, L"", L"" });
             });
             watcher_.Start();
@@ -358,7 +359,7 @@ private:
                 auto connection = AudioPlaybackConnection::TryCreateFromId(hstring{ id });
                 if (!connection) event->error = L"系统无法创建音频连接";
                 else {
-                    connection.StateChanged([callbackWindow, id](AudioPlaybackConnection const& sender, IInspectable const&) {
+                    connection.StateChanged([callbackWindow, id](AudioPlaybackConnection const& sender, winrt::Windows::Foundation::IInspectable const&) {
                         try {
                             PostOwned(callbackWindow->load(), WM_STATE, new StateEvent{ id, sender.State() });
                         } catch (...) {}
