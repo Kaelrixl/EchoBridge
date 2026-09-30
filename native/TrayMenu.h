@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <dwmapi.h>
+#include <objidl.h>
 #include <gdiplus.h>
 #include <algorithm>
 #include <functional>
