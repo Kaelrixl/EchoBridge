@@ -68,6 +68,8 @@ public:
         UpdateBounds();
         DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUNDSMALL;
         DwmSetWindowAttribute(window_, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+        COLORREF noSystemBorder = 0xFFFFFFFE;
+        DwmSetWindowAttribute(window_, DWMWA_BORDER_COLOR, &noSystemBorder, sizeof(noSystemBorder));
         ShowWindow(window_, SW_SHOWNORMAL);
         SetForegroundWindow(window_);
         SetFocus(window_);
