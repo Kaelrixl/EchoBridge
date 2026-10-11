@@ -70,7 +70,7 @@ public:
         rootY_ = std::clamp(rootY_, static_cast<int>(work.top),
             static_cast<int>(work.bottom) - RootHeight());
         submenuLeft_ = rootX_ + rootWidth_ + SubmenuWidth() > work.right;
-        window_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+        window_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED,
             L"EchoBridgeNativeTrayMenu", L"", WS_POPUP,
             rootX_, rootY_, rootWidth_, RootHeight(), owner_, nullptr,
             instance_, this);
@@ -168,17 +168,50 @@ private:
         int x = rootX_ - mainOriginX_;
         int width = rootWidth_ + (submenuOpen_ ? subWidth - overlap_ : 0);
         int height = submenuOpen_ ? std::max(RootHeight(), submenuOriginY_ + SubmenuHeight()) : RootHeight();
-        HRGN shape = CreateRoundRectRgn(mainOriginX_, 0, mainOriginX_ + rootWidth_, RootHeight(), 11, 11);
-        if (submenuOpen_) {
-            HRGN sub = CreateRoundRectRgn(submenuOriginX_, submenuOriginY_,
-                submenuOriginX_ + subWidth, submenuOriginY_ + SubmenuHeight(), 11, 11);
-            CombineRgn(shape, shape, sub, RGN_OR);
-            DeleteObject(sub);
-        }
         SetWindowPos(window_, HWND_TOPMOST, x, rootY_, width, height,
             SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-        SetWindowRgn(window_, shape, TRUE); // Window owns the region after success.
         InvalidateRect(window_, nullptr, FALSE);
+    }
+
+    static float RoundedCoverage(float px, float py, float x, float y,
+        float width, float height) {
+        constexpr float radius = 5.5f;
+        if (px < x || py < y || px >= x + width || py >= y + height) return 0.0f;
+        float cx = std::clamp(px, x + radius, x + width - radius);
+        float cy = std::clamp(py, y + radius, y + height - radius);
+        float dx = px - cx, dy = py - cy;
+        return dx * dx + dy * dy <= radius * radius ? 1.0f : 0.0f;
+    }
+
+    void ApplyRoundedAlpha(void* pixels, int width, int height) const {
+        auto* argb = static_cast<UINT32*>(pixels);
+        constexpr int samples = 4;
+        const float rootHeight = static_cast<float>(RootHeight());
+        const float subWidth = submenuOpen_ ? static_cast<float>(SubmenuWidth()) : 0.0f;
+        const float subHeight = submenuOpen_ ? static_cast<float>(SubmenuHeight()) : 0.0f;
+        for (int py = 0; py < height; ++py) {
+            for (int px = 0; px < width; ++px) {
+                int covered = 0;
+                for (int sy = 0; sy < samples; ++sy) {
+                    for (int sx = 0; sx < samples; ++sx) {
+                        float fx = px + (sx + 0.5f) / samples;
+                        float fy = py + (sy + 0.5f) / samples;
+                        float root = RoundedCoverage(fx, fy, static_cast<float>(mainOriginX_),
+                            0.0f, static_cast<float>(rootWidth_), rootHeight);
+                        float sub = submenuOpen_ ? RoundedCoverage(fx, fy,
+                            static_cast<float>(submenuOriginX_), static_cast<float>(submenuOriginY_),
+                            subWidth, subHeight) : 0.0f;
+                        covered += root > 0.0f || sub > 0.0f;
+                    }
+                }
+                UINT32 alpha = static_cast<UINT32>(covered * 255 / (samples * samples));
+                UINT32 color = argb[py * width + px];
+                UINT32 blue = (color & 0xff) * alpha / 255;
+                UINT32 green = ((color >> 8) & 0xff) * alpha / 255;
+                UINT32 red = ((color >> 16) & 0xff) * alpha / 255;
+                argb[py * width + px] = (alpha << 24) | (red << 16) | (green << 8) | blue;
+            }
+        }
     }
 
     static void Fill(HDC dc, RECT area, COLORREF color) {
@@ -286,20 +319,45 @@ private:
 
     void Paint() {
         PAINTSTRUCT paint{};
-        HDC dc = BeginPaint(window_, &paint);
+        BeginPaint(window_, &paint);
         RECT bounds{};
         GetClientRect(window_, &bounds);
-        HDC buffer = CreateCompatibleDC(dc);
-        HBITMAP bitmap = CreateCompatibleBitmap(dc, bounds.right, bounds.bottom);
+        HDC screen = GetDC(nullptr);
+        HDC buffer = CreateCompatibleDC(screen);
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = bounds.right;
+        info.bmiHeader.biHeight = -bounds.bottom;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        void* pixels = nullptr;
+        HBITMAP bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+        if (!buffer || !bitmap || !pixels) {
+            if (bitmap) DeleteObject(bitmap);
+            if (buffer) DeleteDC(buffer);
+            ReleaseDC(nullptr, screen);
+            EndPaint(window_, &paint);
+            return;
+        }
         HGDIOBJ oldBitmap = SelectObject(buffer, bitmap);
         Fill(buffer, bounds, RGB(250, 250, 250));
         DrawPanel(buffer, mainOriginX_, 0, rootWidth_, main_, selectedMain_, true);
         if (submenuOpen_) DrawPanel(buffer, submenuOriginX_, submenuOriginY_,
             SubmenuWidth(), devices_, selectedDevice_, false);
-        BitBlt(dc, 0, 0, bounds.right, bounds.bottom, buffer, 0, 0, SRCCOPY);
+        ApplyRoundedAlpha(pixels, bounds.right, bounds.bottom);
+        RECT placement{};
+        GetWindowRect(window_, &placement);
+        POINT destination{ placement.left, placement.top };
+        POINT source{ 0, 0 };
+        SIZE size{ bounds.right, bounds.bottom };
+        BLENDFUNCTION blend{ AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+        UpdateLayeredWindow(window_, screen, &destination, &size, buffer, &source,
+            0, &blend, ULW_ALPHA);
         SelectObject(buffer, oldBitmap);
         DeleteObject(bitmap);
         DeleteDC(buffer);
+        ReleaseDC(nullptr, screen);
         EndPaint(window_, &paint);
     }
 
