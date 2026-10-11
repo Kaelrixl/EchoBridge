@@ -15,7 +15,7 @@ EchoBridge 是 Windows 系统托盘蓝牙音频接收工具。电脑通过 A2DP 
 ## 使用方法
 
 1. 在 Windows 蓝牙设置中配对音频发送设备。
-2. 下载构建产物中的 `EchoBridge.exe`，双击运行。程序启动后显示在系统托盘，不弹出主窗口。
+2. 从 [Releases](https://github.com/Kaelrixl/EchoBridge/releases/latest) 下载最新原生版的 `EchoBridge.exe`，双击运行。程序启动后显示在系统托盘，不弹出主窗口。`v1.0.0` 是需要 .NET 的历史 C# 版。
 3. 右键托盘图标，打开「设备」子菜单并选择设备。连接数达到 4 台时，先断开一台再连接其他设备。
 4. 在手机或平板上选择电脑作为蓝牙音频输出目标。
 
