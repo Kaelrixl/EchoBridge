@@ -198,7 +198,7 @@ private:
         }
         if (!submenuWindow_) {
             submenuWindow_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST |
-                    WS_EX_LAYERED | WS_EX_NOACTIVATE,
+                    WS_EX_LAYERED,
                 L"EchoBridgeNativeTraySubmenu", L"", WS_POPUP,
                 0, 0, SubmenuWidth(), SubmenuHeight(), window_, nullptr,
                 instance_, this);
@@ -466,6 +466,8 @@ private:
             submenuOpen_ = false;
             selectedDevice_ = -1;
             UpdateSubmenu();
+            SetForegroundWindow(window_);
+            SetFocus(window_);
         } else {
             Close();
         }
@@ -541,7 +543,11 @@ private:
         case WM_RBUTTONUP: self->Close(); return 0;
         case WM_KEYDOWN: self->KeyDown(wparam); return 0;
         case WM_ACTIVATE:
-            if (window == self->window_ && LOWORD(wparam) == WA_INACTIVE) self->Close();
+            if (LOWORD(wparam) == WA_INACTIVE) {
+                HWND next = reinterpret_cast<HWND>(lparam);
+                if (next != self->window_ && next != self->submenuWindow_ &&
+                    (window == self->window_ || self->submenuOpen_)) self->Close();
+            }
             return 0;
         case WM_NCDESTROY:
             if (window == self->submenuWindow_) self->submenuWindow_ = nullptr;
