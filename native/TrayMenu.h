@@ -292,15 +292,15 @@ private:
     void DrawArrow(HDC dc, int x, int y) {
         Gdiplus::Graphics graphics(dc);
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-        Gdiplus::Pen pen(Color(RGB(55, 55, 55)), Scale(1.6f));
+        Gdiplus::Pen pen(Color(RGB(55, 55, 55)), Scale(1.2f));
         pen.SetLineJoin(Gdiplus::LineJoinRound);
         pen.SetStartCap(Gdiplus::LineCapRound);
         pen.SetEndCap(Gdiplus::LineCapRound);
-        float right = static_cast<float>(x) + Scale(2.5f);
-        float left = static_cast<float>(x) - Scale(2.5f);
+        float right = static_cast<float>(x) + Scale(2.0f);
+        float left = static_cast<float>(x) - Scale(2.0f);
         float center = static_cast<float>(y);
-        graphics.DrawLine(&pen, left, center - Scale(5.0f), right, center);
-        graphics.DrawLine(&pen, right, center, left, center + Scale(5.0f));
+        graphics.DrawLine(&pen, left, center - Scale(3.0f), right, center);
+        graphics.DrawLine(&pen, right, center, left, center + Scale(3.0f));
     }
 
     void DrawPanel(HDC dc, int x, int y, int width, std::vector<Entry> const& entries,
@@ -351,7 +351,7 @@ private:
                 DrawTextW(dc, entry.text.c_str(), static_cast<int>(entry.text.size()),
                     &textRect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT);
                 if (entry.kind == Kind::Devices) {
-                    DrawArrow(dc, x + width - Scale(10), top + row / 2);
+                    DrawArrow(dc, x + width - Scale(22), top + row / 2);
                 }
             }
             top += row;
