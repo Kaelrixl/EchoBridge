@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <dwmapi.h>
+#include <shellscalingapi.h>
 #include <objidl.h>
 #include <gdiplus.h>
 #include <algorithm>
@@ -51,14 +52,19 @@ public:
         POINT cursor{};
         GetCursorPos(&cursor);
         MONITORINFO monitor{ sizeof(monitor) };
-        GetMonitorInfoW(MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST), &monitor);
+        HMONITOR display = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        GetMonitorInfoW(display, &monitor);
+        UINT monitorDpiX = 96, monitorDpiY = 96;
+        if (FAILED(GetDpiForMonitor(display, MDT_EFFECTIVE_DPI,
+                &monitorDpiX, &monitorDpiY))) {
+            monitorDpiX = 96;
+        }
         window_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED,
             L"EchoBridgeNativeTrayMenu", L"", WS_POPUP,
             cursor.x, cursor.y, 1, 1, owner_, nullptr,
             instance_, this);
         if (!window_) return;
-        dpi_ = GetDpiForWindow(window_);
-        if (!dpi_) dpi_ = 96;
+        dpi_ = monitorDpiX;
         rootWidth_ = Scale(148);
         rowHeight_ = Scale(22);
         separatorHeight_ = Scale(5);
