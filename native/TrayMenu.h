@@ -47,20 +47,31 @@ public:
             Gdiplus::GdiplusStartupInput input;
             Gdiplus::GdiplusStartup(&gdiplusToken_, &input, nullptr);
         }
-        if (!font_) {
-            HDC screen = GetDC(nullptr);
-            int dpi = GetDeviceCaps(screen, LOGPIXELSY);
-            ReleaseDC(nullptr, screen);
-            font_ = CreateFontW(-MulDiv(9, dpi, 72), 0, 0, 0, FW_NORMAL,
-                FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
-                L"Microsoft YaHei UI");
-        }
         if (!RegisterWindowClass()) return;
         POINT cursor{};
         GetCursorPos(&cursor);
         MONITORINFO monitor{ sizeof(monitor) };
         GetMonitorInfoW(MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST), &monitor);
+        window_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED,
+            L"EchoBridgeNativeTrayMenu", L"", WS_POPUP,
+            cursor.x, cursor.y, 1, 1, owner_, nullptr,
+            instance_, this);
+        if (!window_) return;
+        dpi_ = GetDpiForWindow(window_);
+        if (!dpi_) dpi_ = 96;
+        rootWidth_ = Scale(148);
+        rowHeight_ = Scale(22);
+        separatorHeight_ = Scale(5);
+        statusHeight_ = Scale(28);
+        overlap_ = Scale(6);
+        if (fontDpi_ != dpi_) {
+            if (font_) DeleteObject(font_);
+            font_ = CreateFontW(-MulDiv(9, dpi_, 72), 0, 0, 0, FW_NORMAL,
+                FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                L"Microsoft YaHei UI");
+            fontDpi_ = dpi_;
+        }
         RECT work = monitor.rcWork;
         rootX_ = std::clamp(static_cast<int>(cursor.x), static_cast<int>(work.left),
             static_cast<int>(work.right) - rootWidth_);
@@ -70,11 +81,6 @@ public:
         rootY_ = std::clamp(rootY_, static_cast<int>(work.top),
             static_cast<int>(work.bottom) - RootHeight());
         submenuLeft_ = rootX_ + rootWidth_ + SubmenuWidth() > work.right;
-        window_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED,
-            L"EchoBridgeNativeTrayMenu", L"", WS_POPUP,
-            rootX_, rootY_, rootWidth_, RootHeight(), owner_, nullptr,
-            instance_, this);
-        if (!window_) return;
         DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUNDSMALL;
         DwmSetWindowAttribute(window_, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
         COLORREF noSystemBorder = 0xFFFFFFFE;
@@ -91,11 +97,13 @@ public:
     }
 
 private:
-    static constexpr int rootWidth_ = 148;
-    static constexpr int rowHeight_ = 22;
-    static constexpr int separatorHeight_ = 5;
-    static constexpr int statusHeight_ = 28;
-    static constexpr int overlap_ = 6;
+    int rootWidth_ = 148;
+    int rowHeight_ = 22;
+    int separatorHeight_ = 5;
+    int statusHeight_ = 28;
+    int overlap_ = 6;
+    UINT dpi_ = 96;
+    UINT fontDpi_ = 0;
     HINSTANCE instance_{};
     HWND owner_{};
     HWND window_{};
@@ -112,28 +120,31 @@ private:
     bool submenuOpen_ = false;
     bool submenuLeft_ = false;
 
-    static int Height(Entry const& entry) {
+    int Scale(int value) const { return MulDiv(value, static_cast<int>(dpi_), 96); }
+    float Scale(float value) const { return value * static_cast<float>(dpi_) / 96.0f; }
+
+    int Height(Entry const& entry) const {
         if (entry.kind == Kind::Status) return statusHeight_;
         if (entry.kind == Kind::Separator) return separatorHeight_;
         return rowHeight_;
     }
 
     int RootHeight() const {
-        int height = 2;
+        int height = Scale(2);
         for (auto const& entry : main_) height += Height(entry);
         return height;
     }
 
-    int SubmenuHeight() const { return 2 + static_cast<int>(devices_.size()) * rowHeight_; }
+    int SubmenuHeight() const { return Scale(2) + static_cast<int>(devices_.size()) * rowHeight_; }
 
     int SubmenuWidth() const {
-        int width = 148;
+        int width = Scale(148);
         HDC screen = GetDC(nullptr);
         HGDIOBJ old = font_ ? SelectObject(screen, font_) : nullptr;
         for (auto const& entry : devices_) {
             SIZE size{};
             GetTextExtentPoint32W(screen, entry.text.c_str(), static_cast<int>(entry.text.size()), &size);
-            width = std::max(width, static_cast<int>(size.cx) + 48);
+            width = std::max(width, static_cast<int>(size.cx) + Scale(48));
         }
         if (old) SelectObject(screen, old);
         ReleaseDC(nullptr, screen);
@@ -141,7 +152,7 @@ private:
     }
 
     int DevicesTop() const {
-        int top = 1;
+        int top = Scale(1);
         for (auto const& entry : main_) {
             if (entry.kind == Kind::Devices) return top;
             top += Height(entry);
@@ -187,8 +198,7 @@ private:
     }
 
     static float RoundedCoverage(float px, float py, float x, float y,
-        float width, float height) {
-        constexpr float radius = 7.0f;
+        float width, float height, float radius) {
         if (px < x || py < y || px >= x + width || py >= y + height) return 0.0f;
         float cx = std::clamp(px, x + radius, x + width - radius);
         float cy = std::clamp(py, y + radius, y + height - radius);
@@ -196,9 +206,10 @@ private:
         return dx * dx + dy * dy <= radius * radius ? 1.0f : 0.0f;
     }
 
-    static void ApplyRoundedAlpha(void* pixels, int width, int height) {
+    void ApplyRoundedAlpha(void* pixels, int width, int height) const {
         auto* argb = static_cast<UINT32*>(pixels);
         constexpr int samples = 8;
+        const float radius = Scale(7.0f);
         for (int py = 0; py < height; ++py) {
             for (int px = 0; px < width; ++px) {
                 int covered = 0;
@@ -207,7 +218,7 @@ private:
                         float fx = px + (sx + 0.5f) / samples;
                         float fy = py + (sy + 0.5f) / samples;
                         covered += RoundedCoverage(fx, fy, 0.0f, 0.0f,
-                            static_cast<float>(width), static_cast<float>(height)) > 0.0f;
+                            static_cast<float>(width), static_cast<float>(height), radius) > 0.0f;
                     }
                 }
                 UINT32 alpha = static_cast<UINT32>(covered * 255 / (samples * samples));
@@ -255,17 +266,35 @@ private:
         Gdiplus::Graphics graphics(dc);
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
         Gdiplus::GraphicsPath path;
-        RoundedPath(path, static_cast<float>(x), static_cast<float>(y), 12.0f, 12.0f, 2.0f);
+        float size = Scale(12.0f);
+        RoundedPath(path, static_cast<float>(x), static_cast<float>(y),
+            size, size, Scale(2.0f));
         if (checked) {
             Gdiplus::SolidBrush brush(Color(RGB(76, 175, 80)));
             graphics.FillPath(&brush, &path);
-            Gdiplus::Pen check(Gdiplus::Color(255, 255, 255, 255), 1.5f);
-            graphics.DrawLine(&check, x + 3.2f, y + 6.0f, x + 5.2f, y + 8.0f);
-            graphics.DrawLine(&check, x + 5.2f, y + 8.0f, x + 9.7f, y + 3.5f);
+            Gdiplus::Pen check(Gdiplus::Color(255, 255, 255, 255), Scale(1.5f));
+            graphics.DrawLine(&check, x + Scale(3.2f), y + Scale(6.0f),
+                x + Scale(5.2f), y + Scale(8.0f));
+            graphics.DrawLine(&check, x + Scale(5.2f), y + Scale(8.0f),
+                x + Scale(9.7f), y + Scale(3.5f));
         } else {
-            Gdiplus::Pen pen(Color(RGB(200, 200, 200)), 1.0f);
+            Gdiplus::Pen pen(Color(RGB(200, 200, 200)), Scale(1.0f));
             graphics.DrawPath(&pen, &path);
         }
+    }
+
+    void DrawArrow(HDC dc, int x, int y) {
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        Gdiplus::Pen pen(Color(RGB(55, 55, 55)), Scale(1.6f));
+        pen.SetLineJoin(Gdiplus::LineJoinRound);
+        pen.SetStartCap(Gdiplus::LineCapRound);
+        pen.SetEndCap(Gdiplus::LineCapRound);
+        float right = static_cast<float>(x) + Scale(2.5f);
+        float left = static_cast<float>(x) - Scale(2.5f);
+        float center = static_cast<float>(y);
+        graphics.DrawLine(&pen, left, center - Scale(5.0f), right, center);
+        graphics.DrawLine(&pen, right, center, left, center + Scale(5.0f));
     }
 
     void DrawPanel(HDC dc, int x, int y, int width, std::vector<Entry> const& entries,
@@ -273,7 +302,7 @@ private:
         int height = root ? RootHeight() : SubmenuHeight();
         RECT panel{ x, y, x + width, y + height };
         Fill(dc, panel, RGB(250, 250, 250));
-        int top = y + 1;
+        int top = y + Scale(1);
         HGDIOBJ oldFont = font_ ? SelectObject(dc, font_) : nullptr;
         // ClearType needs an opaque target whose background matches the row.
         SetBkMode(dc, OPAQUE);
@@ -283,44 +312,46 @@ private:
             if (entry.kind == Kind::Separator) {
                 HPEN pen = CreatePen(PS_SOLID, 1, RGB(228, 228, 228));
                 HGDIOBJ oldPen = SelectObject(dc, pen);
-                MoveToEx(dc, x + 10, top + row / 2, nullptr);
-                LineTo(dc, x + width - 10, top + row / 2);
+                MoveToEx(dc, x + Scale(10), top + row / 2, nullptr);
+                LineTo(dc, x + width - Scale(10), top + row / 2);
                 SelectObject(dc, oldPen);
                 DeleteObject(pen);
             } else if (entry.kind == Kind::Status) {
-                int dotX = x + (width - 88) / 2;
+                float diameter = Scale(10.0f);
+                float spacing = Scale(16.0f);
+                float dotX = x + (width - 4 * diameter - 3 * spacing) / 2.0f;
                 Gdiplus::Graphics graphics(dc);
                 graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
                 for (int dot = 0; dot < 4; ++dot) {
                     int state = dot < static_cast<int>(entry.lights.size()) ? entry.lights[dot] : 0;
                     COLORREF color = state == 2 ? RGB(76, 175, 80) : state == 1 ? RGB(33, 150, 243) : RGB(228, 228, 228);
                     Gdiplus::SolidBrush brush(Color(color));
-                    graphics.FillEllipse(&brush, static_cast<float>(dotX),
-                        static_cast<float>(top) + (row - 10) / 2.0f, 10.0f, 10.0f);
-                    dotX += 26;
+                    graphics.FillEllipse(&brush, dotX,
+                        static_cast<float>(top) + (row - diameter) / 2.0f,
+                        diameter, diameter);
+                    dotX += diameter + spacing;
                 }
             } else {
                 if (static_cast<int>(i) == selected && entry.enabled) {
-                    RECT highlight{ x + 1, top, x + width - 1, top + row };
+                    RECT highlight{ x + Scale(1), top, x + width - Scale(1), top + row };
                     Fill(dc, highlight, RGB(235, 240, 245));
                 }
-                if (entry.checkable) DrawCheck(dc, x + 10, top + (row - 12) / 2 - 2, entry.checked);
+                if (entry.checkable) DrawCheck(dc, x + Scale(10),
+                    top + (row - Scale(12)) / 2 - Scale(2), entry.checked);
                 SetBkColor(dc, static_cast<int>(i) == selected && entry.enabled
                     ? RGB(235, 240, 245) : RGB(250, 250, 250));
                 SetTextColor(dc, entry.enabled ? RGB(45, 45, 45) : RGB(160, 160, 160));
-                RECT textRect{ x + 34, top, x + width - 18, top + row };
+                RECT textRect{ x + Scale(34), top, x + width - Scale(18), top + row };
                 DrawTextW(dc, entry.text.c_str(), static_cast<int>(entry.text.size()),
                     &textRect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT);
                 if (entry.kind == Kind::Devices) {
-                    RECT arrowRect{ x + width - 15, top, x + width - 2, top + row };
-                    DrawTextW(dc, L"›", 1, &arrowRect,
-                        DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT);
+                    DrawArrow(dc, x + width - Scale(10), top + row / 2);
                 }
             }
             top += row;
         }
         if (oldFont) SelectObject(dc, oldFont);
-        Outline(dc, panel, RGB(218, 218, 218), 7);
+        Outline(dc, panel, RGB(218, 218, 218), Scale(7.0f));
     }
 
     void RenderPanel(HWND target, int x, int y, int width, int height,
@@ -373,8 +404,8 @@ private:
     }
 
     int HitMain(int x, int y) const {
-        if (x < 0 || x >= rootWidth_ || y < 1) return -1;
-        int top = 1;
+        if (x < 0 || x >= rootWidth_ || y < Scale(1)) return -1;
+        int top = Scale(1);
         for (size_t i = 0; i < main_.size(); ++i) {
             int bottom = top + Height(main_[i]);
             if (y >= top && y < bottom) return static_cast<int>(i);
@@ -384,8 +415,8 @@ private:
     }
 
     int HitDevice(int x, int y) const {
-        if (!submenuOpen_ || x < 0 || x >= SubmenuWidth() || y < 1) return -1;
-        int index = (y - 1) / rowHeight_;
+        if (!submenuOpen_ || x < 0 || x >= SubmenuWidth() || y < Scale(1)) return -1;
+        int index = (y - Scale(1)) / rowHeight_;
         return index < static_cast<int>(devices_.size()) ? index : -1;
     }
 
