@@ -1,158 +1,60 @@
 # EchoBridge
 
-**EchoBridge** 是一个极简的 Windows 系统托盘工具，让你的电脑能够作为蓝牙音频接收器（A2DP Sink），接收手机、平板或其他蓝牙设备发出的音频，并通过电脑的扬声器或耳机播放出来。
+EchoBridge 是 Windows 系统托盘蓝牙音频接收工具。电脑通过 A2DP Sink 接收手机、平板等已配对设备的音频，并用电脑的扬声器或耳机播放。
 
-> 无界面、零配置、开机自启——把你的电脑变成一台蓝牙音箱。
+当前主工程使用原生 C++ 和 Windows Runtime API，发布产物是单个 `EchoBridge.exe`，运行时无需安装 .NET。旧版 C# 工程保存在开发者本机的 `archive/csharp/`，归档目录不会上传到仓库。
 
-仓库并列维护两个实现：`native/` 是原生 C++/WinRT 版，目标为免安装 .NET 的单 EXE；`csharp/` 保留原 C# + WinForms 版。两版共用根目录的 `Assets/` 图标，配置字段保持一致。
+## 功能
 
----
+- 托盘菜单中查看、连接和断开已配对的蓝牙音频设备；最多同时连接 4 台。
+- 刷新设备列表、断开全部连接。
+- 启动时自动重连上次连接的设备，并可设置开机自启动。
+- 打开 Windows 蓝牙设置。
+- 根据显示器的缩放比例绘制托盘菜单。
 
-## 功能特性
+## 使用方法
 
-- 🎵 **蓝牙音频接收**：将电脑作为 A2DP Sink，接收任意蓝牙设备的音频流
-- 🖱 **极简托盘操作**：右键系统托盘图标，一键连接 / 断开蓝牙设备
-- 🔄 **开机自动重连**：可配置在程序启动时自动恢复上次连接的设备
-- 🚀 **开机自启动**：支持注册到 Windows 启动项，开机无感运行
-- 🔊 **多设备并联**：最多同时连接 4 台蓝牙设备；列表显示全部已发现设备，连接满额时须先断开一台才能连接其他设备
-- ♻️ **物理刷新扫描**：强制重新扫描蓝牙设备，解决设备列表不更新的问题
-- 🪶 **极低资源占用**：事件驱动架构，待机时 CPU 接近 0%，内存约 25 MB
-- 🧹 **绿色无残留**：配置文件仅 `EchoBridge.json` 一个文件，无注册表垃圾，无日志磁盘写入
+1. 在 Windows 蓝牙设置中配对音频发送设备。
+2. 下载构建产物中的 `EchoBridge.exe`，双击运行。程序启动后显示在系统托盘，不弹出主窗口。
+3. 右键托盘图标，打开「设备」子菜单并选择设备。连接数达到 4 台时，先断开一台再连接其他设备。
+4. 在手机或平板上选择电脑作为蓝牙音频输出目标。
 
----
+程序会在 EXE 同级目录生成 `EchoBridge.json` 保存偏好；删除该文件可重置配置。请把 EXE 放在有写入权限的目录中。
 
-## 系统要求
-
-| 项目 | 要求 |
-| :--- | :--- |
-| 操作系统 | Windows 10 版本 2004（Build 19041）或更高版本 |
-| 原生版运行环境 | Windows 自带的系统组件，无需安装 .NET |
-| C# 版运行环境 | [.NET 10.0 桌面运行时（x64）](https://dotnet.microsoft.com/download/dotnet/10.0) |
-| 蓝牙 | 支持 A2DP 协议的蓝牙适配器 |
-
-> 原生版目前需要通过 Windows C++ 工具链构建并完成蓝牙设备实测后再发布；现有 C# 发布包仍需 .NET 10 桌面运行时。
-
----
-
-## 快速上手
-
-### 1. 配对蓝牙设备
-
-首先在 **Windows 系统设置 → 蓝牙** 中将你的手机、平板等设备与电脑**配对成功**。
-
-### 2. 运行 EchoBridge
-
-下载所选实现的 `EchoBridge.exe`，**直接双击运行**，程序将以托盘图标的形式静默启动，不会弹出任何窗口。原生版无需另装 .NET；不要同时运行两版连接同一蓝牙设备。
-
-### 3. 连接设备
-
-在**系统托盘**找到 EchoBridge 图标，**右键**打开菜单，在「设备」子菜单中勾选你想连接的蓝牙设备。
-
-### 4. 开始播放
-
-在手机/平板上将蓝牙音频输出切换到你的电脑，即可通过电脑扬声器收听音频。
-
----
-
-## 托盘菜单说明
-
-```
-┌──────────────────────────────┐
-│  ● ● ○ ○   ← 设备状态指示灯  │
-├──────────────────────────────┤
-│  设备          ▶             │  → 展开已配对的 A2DP 设备列表；连接满 4 台时其他设备暂不可选
-│  刷新设备                     │  → 强制物理重新扫描蓝牙设备
-│  断开全部                     │  → 断开所有当前活跃的蓝牙连接
-├──────────────────────────────┤
-│  ✅ 启动自动重连               │  → 启动时自动重连上次的设备
-│  ✅ 开机自启动                 │  → 登录 Windows 后自动静默运行
-│  蓝牙设置                     │  → 打开 Windows 蓝牙系统设置
-├──────────────────────────────┤
-│  退出                         │
-└──────────────────────────────┘
-```
-
-**状态指示灯颜色含义：**
-- 🟢 绿色：设备已连接（音频正在传输）
-- 🔵 蓝色：设备已配对但未连接
-- ⚪ 灰色：该设备槽位为空
-
----
-
-## 配置文件
-
-两版程序运行后都会在 **EXE 同级目录**生成 `EchoBridge.json`，保存相同格式的使用偏好：
-
-```json
-{
-  "ReconnectOnStart": true,
-  "StartWithWindows": true,
-  "LastDeviceIds": [
-    "BluetoothLE#BluetoothLE..."
-  ]
-}
-```
-
-如需重置所有设置，删除该文件后重新运行即可。
-
----
+运行环境：Windows 10 版本 2004（Build 19041）或更新版本、支持 A2DP 的蓝牙适配器。不需要 .NET 桌面运行时。
 
 ## 从源码构建
 
-**目录结构：**
+构建机需要 Visual Studio 2022 C++ 构建工具、Windows 10/11 SDK 和 CMake；运行机不需要这些开发工具。
+
+```powershell
+pwsh -File .\build.ps1
+```
+
+产物位于 `build/out/Release/EchoBridge.exe`。不安装本地构建工具时，可以在 GitHub 仓库的「Actions」页面下载最新成功构建的 `EchoBridge-win-x64` 产物。
+
+项目结构：
 
 ```text
-Assets/              两版共用的图标
-csharp/              原 C# + WinForms 实现
-native/              原生 C++/WinRT 实现
-README.md            共用说明
+.github/workflows/  Windows 构建与产物上传
+Assets/             程序图标
+include/            C++ 头文件
+resources/          Windows 资源与应用清单
+src/                C++ 源文件
+CMakeLists.txt       CMake 工程入口
+build.ps1           本地构建入口
 ```
 
-**原生版：**构建机需要 Visual Studio 2022 的 C++ 桌面工作负载、Windows 10/11 SDK 和 CMake。运行机只需 Windows 10 Build 19041 或更新版本。
-
-```powershell
-pwsh -File .\native\build.ps1
-```
-
-产物位于 `native/build/out/Release/EchoBridge.exe`。构建使用静态 C++ 运行库，运行机无需安装 .NET 桌面运行时。
-
-**C# 版：**构建机需要 .NET 10 SDK；运行机需要 .NET 10 桌面运行时。
-
-```powershell
-pwsh -File .\csharp\build-and-sign.ps1
-```
-
-手动发布 C# 版：
-
-```powershell
-dotnet publish .\csharp\EchoBridge.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true
-```
-
----
+`archive/`、`build/`、`out/` 是本地目录，已被 Git 忽略。
 
 ## 常见问题
 
-**Q：连接设备后电脑没有声音？**
-A：检查 Windows 音频输出设备是否已切换为蓝牙设备。进入「系统设置 → 声音」确认默认输出设备。同时确保手机端将蓝牙音频目标选择为你的电脑名称。
+**设备列表里没有设备？** 先确认设备已经在 Windows 蓝牙设置中完成配对，再点击托盘菜单的「刷新设备」。
 
-**Q：设备列表里看不到我的设备？**
-A：先在 Windows 蓝牙设置里确认设备已成功配对（不只是"发现"）。配对完成后点击托盘菜单的「刷新设备」。
+**连接后没有声音？** 在发送设备上将音频输出切换到电脑，并检查 Windows 当前播放设备。必要时点击「断开全部」后重新连接。
 
-**Q：有时候连接后两端都没有声音？**
-A：程序内置了 1.5 秒的设备间重连缓冲，解决了多设备并发抢占音频路由导致无声的问题。如果仍然出现，尝试点击「断开全部」再重新连接。
+## 致谢与许可
 
-**Q：程序会消耗很多性能吗？**
-A：几乎零消耗。EchoBridge 采用纯事件驱动架构，音频数据传输完全由 Windows 蓝牙驱动层处理，程序本身不做任何音频数据转发。待机时 CPU 占用 < 0.1%，内存约 25 MB。
+核心思路受到 [AudioPlaybackConnector](https://github.com/ysc3839/AudioPlaybackConnector) 的启发。EchoBridge 使用 Windows Runtime 的 `AudioPlaybackConnection` API，未复用该项目代码。
 
----
-
-## 致谢
-
-本项目的核心思路受到 [AudioPlaybackConnector](https://github.com/ysc3839/AudioPlaybackConnector)（作者：[ysc3839](https://github.com/ysc3839)，MIT License）的启发。  
-EchoBridge 的 C# + WinForms 版与原生 C++/WinRT 版都使用 Windows WinRT `AudioPlaybackConnection` API，未复用原项目代码。
-
----
-
-## 许可证
-
-本项目基于 **MIT License** 开放源代码，详见 [LICENSE](LICENSE) 文件。
+本项目采用 [MIT 许可证](LICENSE)。
