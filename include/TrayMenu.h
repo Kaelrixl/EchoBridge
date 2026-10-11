@@ -95,6 +95,9 @@ public:
         ShowWindow(window_, SW_SHOWNORMAL);
         SetForegroundWindow(window_);
         SetFocus(window_);
+        activeHookMenu_ = this;
+        mouseHook_ = SetWindowsHookExW(WH_MOUSE_LL, MouseHook, instance_, 0);
+        if (!mouseHook_) activeHookMenu_ = nullptr;
     }
 
     void Close() {
@@ -476,9 +479,6 @@ private:
             UpdateSubmenu();
             SetForegroundWindow(window_);
             SetFocus(window_);
-            activeHookMenu_ = this;
-            if (!mouseHook_)
-                mouseHook_ = SetWindowsHookExW(WH_MOUSE_LL, MouseHook, instance_, 0);
         } else {
             Close();
         }
