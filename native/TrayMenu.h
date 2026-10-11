@@ -236,7 +236,8 @@ private:
         Fill(dc, panel, RGB(250, 250, 250));
         int top = y + 1;
         HGDIOBJ oldFont = font_ ? SelectObject(dc, font_) : nullptr;
-        SetBkMode(dc, TRANSPARENT);
+        // ClearType needs an opaque target whose background matches the row.
+        SetBkMode(dc, OPAQUE);
         for (size_t i = 0; i < entries.size(); ++i) {
             Entry const& entry = entries[i];
             int row = Height(entry);
@@ -265,6 +266,8 @@ private:
                     Fill(dc, highlight, RGB(235, 240, 245));
                 }
                 if (entry.checkable) DrawCheck(dc, x + 10, top + (row - 12) / 2 - 2, entry.checked);
+                SetBkColor(dc, static_cast<int>(i) == selected && entry.enabled
+                    ? RGB(235, 240, 245) : RGB(250, 250, 250));
                 SetTextColor(dc, entry.enabled ? RGB(45, 45, 45) : RGB(160, 160, 160));
                 RECT textRect{ x + 34, top, x + width - 18, top + row };
                 DrawTextW(dc, entry.text.c_str(), static_cast<int>(entry.text.size()),
@@ -278,7 +281,7 @@ private:
             top += row;
         }
         if (oldFont) SelectObject(dc, oldFont);
-        Outline(dc, panel, RGB(218, 218, 218), 11);
+        Outline(dc, panel, RGB(218, 218, 218), 5);
     }
 
     void Paint() {
