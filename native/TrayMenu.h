@@ -75,17 +75,18 @@ public:
             rootX_, rootY_, rootWidth_, RootHeight(), owner_, nullptr,
             instance_, this);
         if (!window_) return;
-        UpdateBounds();
         DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUNDSMALL;
         DwmSetWindowAttribute(window_, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
         COLORREF noSystemBorder = 0xFFFFFFFE;
         DwmSetWindowAttribute(window_, DWMWA_BORDER_COLOR, &noSystemBorder, sizeof(noSystemBorder));
+        RenderMain();
         ShowWindow(window_, SW_SHOWNORMAL);
         SetForegroundWindow(window_);
         SetFocus(window_);
     }
 
     void Close() {
+        if (submenuWindow_) DestroyWindow(submenuWindow_);
         if (window_) DestroyWindow(window_);
     }
 
@@ -98,6 +99,7 @@ private:
     HINSTANCE instance_{};
     HWND owner_{};
     HWND window_{};
+    HWND submenuWindow_{};
     HFONT font_{};
     ULONG_PTR gdiplusToken_{};
     std::vector<Entry> main_;
@@ -105,9 +107,6 @@ private:
     std::function<void(UINT)> onCommand_;
     int rootX_{};
     int rootY_{};
-    int mainOriginX_{};
-    int submenuOriginX_{};
-    int submenuOriginY_{};
     int selectedMain_ = -1;
     int selectedDevice_ = -1;
     bool submenuOpen_ = false;
@@ -156,16 +155,35 @@ private:
         klass.hInstance = instance_;
         klass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         klass.lpszClassName = L"EchoBridgeNativeTrayMenu";
+        if (!RegisterClassExW(&klass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+        klass.lpszClassName = L"EchoBridgeNativeTraySubmenu";
         return RegisterClassExW(&klass) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
     }
 
-    void UpdateBounds() {
-        if (!window_) return;
-        int subWidth = SubmenuWidth();
-        mainOriginX_ = submenuOpen_ && submenuLeft_ ? subWidth - overlap_ : 0;
-        submenuOriginX_ = submenuLeft_ ? 0 : rootWidth_ - overlap_;
-        submenuOriginY_ = DevicesTop();
-        Render();
+    void UpdateSubmenu() {
+        RenderMain();
+        if (!submenuOpen_) {
+            if (submenuWindow_) DestroyWindow(submenuWindow_);
+            return;
+        }
+        if (!submenuWindow_) {
+            submenuWindow_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST |
+                    WS_EX_LAYERED | WS_EX_NOACTIVATE,
+                L"EchoBridgeNativeTraySubmenu", L"", WS_POPUP,
+                0, 0, SubmenuWidth(), SubmenuHeight(), window_, nullptr,
+                instance_, this);
+            if (!submenuWindow_) return;
+            DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUNDSMALL;
+            DwmSetWindowAttribute(submenuWindow_, DWMWA_WINDOW_CORNER_PREFERENCE,
+                &corner, sizeof(corner));
+            COLORREF noSystemBorder = 0xFFFFFFFE;
+            DwmSetWindowAttribute(submenuWindow_, DWMWA_BORDER_COLOR,
+                &noSystemBorder, sizeof(noSystemBorder));
+            RenderSubmenu();
+            ShowWindow(submenuWindow_, SW_SHOWNOACTIVATE);
+        } else {
+            RenderSubmenu();
+        }
     }
 
     static float RoundedCoverage(float px, float py, float x, float y,
@@ -178,12 +196,9 @@ private:
         return dx * dx + dy * dy <= radius * radius ? 1.0f : 0.0f;
     }
 
-    void ApplyRoundedAlpha(void* pixels, int width, int height) const {
+    static void ApplyRoundedAlpha(void* pixels, int width, int height) {
         auto* argb = static_cast<UINT32*>(pixels);
         constexpr int samples = 8;
-        const float rootHeight = static_cast<float>(RootHeight());
-        const float subWidth = submenuOpen_ ? static_cast<float>(SubmenuWidth()) : 0.0f;
-        const float subHeight = submenuOpen_ ? static_cast<float>(SubmenuHeight()) : 0.0f;
         for (int py = 0; py < height; ++py) {
             for (int px = 0; px < width; ++px) {
                 int covered = 0;
@@ -191,12 +206,8 @@ private:
                     for (int sx = 0; sx < samples; ++sx) {
                         float fx = px + (sx + 0.5f) / samples;
                         float fy = py + (sy + 0.5f) / samples;
-                        float root = RoundedCoverage(fx, fy, static_cast<float>(mainOriginX_),
-                            0.0f, static_cast<float>(rootWidth_), rootHeight);
-                        float sub = submenuOpen_ ? RoundedCoverage(fx, fy,
-                            static_cast<float>(submenuOriginX_), static_cast<float>(submenuOriginY_),
-                            subWidth, subHeight) : 0.0f;
-                        covered += root > 0.0f || sub > 0.0f;
+                        covered += RoundedCoverage(fx, fy, 0.0f, 0.0f,
+                            static_cast<float>(width), static_cast<float>(height)) > 0.0f;
                     }
                 }
                 UINT32 alpha = static_cast<UINT32>(covered * 255 / (samples * samples));
@@ -312,11 +323,9 @@ private:
         Outline(dc, panel, RGB(218, 218, 218), 7);
     }
 
-    void Render() {
-        if (!window_) return;
-        int subWidth = SubmenuWidth();
-        int width = rootWidth_ + (submenuOpen_ ? subWidth - overlap_ : 0);
-        int height = submenuOpen_ ? std::max(RootHeight(), submenuOriginY_ + SubmenuHeight()) : RootHeight();
+    void RenderPanel(HWND target, int x, int y, int width, int height,
+        std::vector<Entry> const& entries, int selected, bool root) {
+        if (!target) return;
         RECT bounds{ 0, 0, width, height };
         HDC screen = GetDC(nullptr);
         HDC buffer = CreateCompatibleDC(screen);
@@ -337,15 +346,13 @@ private:
         }
         HGDIOBJ oldBitmap = SelectObject(buffer, bitmap);
         Fill(buffer, bounds, RGB(250, 250, 250));
-        DrawPanel(buffer, mainOriginX_, 0, rootWidth_, main_, selectedMain_, true);
-        if (submenuOpen_) DrawPanel(buffer, submenuOriginX_, submenuOriginY_,
-            subWidth, devices_, selectedDevice_, false);
+        DrawPanel(buffer, 0, 0, width, entries, selected, root);
         ApplyRoundedAlpha(pixels, width, height);
-        POINT destination{ rootX_ - mainOriginX_, rootY_ };
+        POINT destination{ x, y };
         POINT source{ 0, 0 };
         SIZE size{ width, height };
         BLENDFUNCTION blend{ AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-        UpdateLayeredWindow(window_, screen, &destination, &size, buffer, &source,
+        UpdateLayeredWindow(target, screen, &destination, &size, buffer, &source,
             0, &blend, ULW_ALPHA);
         SelectObject(buffer, oldBitmap);
         DeleteObject(bitmap);
@@ -353,8 +360,20 @@ private:
         ReleaseDC(nullptr, screen);
     }
 
+    void RenderMain() {
+        RenderPanel(window_, rootX_, rootY_, rootWidth_, RootHeight(),
+            main_, selectedMain_, true);
+    }
+
+    void RenderSubmenu() {
+        int width = SubmenuWidth();
+        int x = submenuLeft_ ? rootX_ - width + overlap_ : rootX_ + rootWidth_ - overlap_;
+        RenderPanel(submenuWindow_, x, rootY_ + DevicesTop(), width, SubmenuHeight(),
+            devices_, selectedDevice_, false);
+    }
+
     int HitMain(int x, int y) const {
-        if (x < mainOriginX_ || x >= mainOriginX_ + rootWidth_ || y < 1) return -1;
+        if (x < 0 || x >= rootWidth_ || y < 1) return -1;
         int top = 1;
         for (size_t i = 0; i < main_.size(); ++i) {
             int bottom = top + Height(main_[i]);
@@ -365,16 +384,18 @@ private:
     }
 
     int HitDevice(int x, int y) const {
-        if (!submenuOpen_ || x < submenuOriginX_ || x >= submenuOriginX_ + SubmenuWidth() ||
-            y < submenuOriginY_ + 1) return -1;
-        int index = (y - submenuOriginY_ - 1) / rowHeight_;
+        if (!submenuOpen_ || x < 0 || x >= SubmenuWidth() || y < 1) return -1;
+        int index = (y - 1) / rowHeight_;
         return index < static_cast<int>(devices_.size()) ? index : -1;
     }
 
-    void MouseMove(int x, int y) {
-        int device = HitDevice(x, y);
-        if (device >= 0) {
-            if (selectedDevice_ != device) { selectedDevice_ = device; Render(); }
+    void MouseMove(HWND source, int x, int y) {
+        if (source == submenuWindow_) {
+            int device = HitDevice(x, y);
+            if (device >= 0 && selectedDevice_ != device) {
+                selectedDevice_ = device;
+                RenderSubmenu();
+            }
             return;
         }
         int main = HitMain(x, y);
@@ -383,7 +404,7 @@ private:
                 selectedMain_ = main;
                 selectedDevice_ = -1;
                 submenuOpen_ = main_[main].kind == Kind::Devices;
-                UpdateBounds();
+                UpdateSubmenu();
             }
         }
     }
@@ -396,14 +417,14 @@ private:
     }
 
     void KeyDown(WPARAM key) {
-        if (key == VK_ESCAPE) { if (submenuOpen_) { submenuOpen_ = false; UpdateBounds(); } else Close(); return; }
-        if (key == VK_LEFT && submenuOpen_) { submenuOpen_ = false; UpdateBounds(); return; }
+        if (key == VK_ESCAPE) { if (submenuOpen_) { submenuOpen_ = false; UpdateSubmenu(); } else Close(); return; }
+        if (key == VK_LEFT && submenuOpen_) { submenuOpen_ = false; UpdateSubmenu(); return; }
         if (key == VK_RIGHT && selectedMain_ >= 0 && main_[selectedMain_].kind == Kind::Devices) {
             submenuOpen_ = true;
             selectedDevice_ = -1;
             for (size_t i = 0; i < devices_.size(); ++i)
                 if (devices_[i].enabled) { selectedDevice_ = static_cast<int>(i); break; }
-            UpdateBounds();
+            UpdateSubmenu();
             return;
         }
         if (key == VK_RETURN) {
@@ -433,7 +454,8 @@ private:
                 }
             }
         }
-        Render();
+        if (submenuOpen_) RenderSubmenu();
+        else RenderMain();
     }
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -446,12 +468,15 @@ private:
         if (!self) return DefWindowProcW(window, message, wparam, lparam);
         switch (message) {
         case WM_PAINT: ValidateRect(window, nullptr); return 0;
-        case WM_MOUSEMOVE: self->MouseMove(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)); return 0;
+        case WM_MOUSEMOVE:
+            self->MouseMove(window, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+            return 0;
         case WM_LBUTTONUP: {
             int x = GET_X_LPARAM(lparam), y = GET_Y_LPARAM(lparam);
-            int device = self->HitDevice(x, y);
-            if (device >= 0) self->Activate(self->devices_[device]);
-            else {
+            if (window == self->submenuWindow_) {
+                int device = self->HitDevice(x, y);
+                if (device >= 0) self->Activate(self->devices_[device]);
+            } else {
                 int main = self->HitMain(x, y);
                 if (main >= 0) self->Activate(self->main_[main]);
             }
@@ -460,10 +485,11 @@ private:
         case WM_RBUTTONUP: self->Close(); return 0;
         case WM_KEYDOWN: self->KeyDown(wparam); return 0;
         case WM_ACTIVATE:
-            if (LOWORD(wparam) == WA_INACTIVE) self->Close();
+            if (window == self->window_ && LOWORD(wparam) == WA_INACTIVE) self->Close();
             return 0;
         case WM_NCDESTROY:
-            self->window_ = nullptr;
+            if (window == self->submenuWindow_) self->submenuWindow_ = nullptr;
+            else if (window == self->window_) self->window_ = nullptr;
             SetWindowLongPtrW(window, GWLP_USERDATA, 0);
             return DefWindowProcW(window, message, wparam, lparam);
         }

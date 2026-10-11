@@ -159,7 +159,7 @@ public:
         wcscpy_s(icon.szTip, L"EchoBridge");
         Shell_NotifyIconW(NIM_ADD, &icon);
         icon.uVersion = NOTIFYICON_VERSION_4;
-        Shell_NotifyIconW(NIM_SETVERSION, &icon);
+        trayVersion4_ = Shell_NotifyIconW(NIM_SETVERSION, &icon) != FALSE;
 
         if (settings_.startup && !StartupEnabled()) SetStartup(true);
         StartWatcher();
@@ -193,6 +193,7 @@ private:
     std::wstring status_ = L"未连接";
     std::vector<std::wstring> menuIds_;
     TrayMenu trayMenu_;
+    bool trayVersion4_ = false;
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
         App* self = reinterpret_cast<App*>(GetWindowLongPtrW(window, GWLP_USERDATA));
@@ -208,7 +209,7 @@ private:
     LRESULT Handle(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
         switch (message) {
         case WM_TRAY:
-            if (LOWORD(lparam) == WM_CONTEXTMENU || LOWORD(lparam) == WM_RBUTTONUP) ShowMenu();
+            if (LOWORD(lparam) == (trayVersion4_ ? WM_CONTEXTMENU : WM_RBUTTONUP)) ShowMenu();
             return 0;
         case WM_DEVICE: {
             std::unique_ptr<DeviceEvent> event(reinterpret_cast<DeviceEvent*>(lparam));
