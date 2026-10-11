@@ -15,7 +15,6 @@
 #include <memory>
 #include <set>
 #include <string>
-#include <thread>
 #include <vector>
 
 using namespace winrt;
@@ -47,8 +46,14 @@ struct DeviceEvent {
 struct ConnectEvent {
     std::wstring id;
     unsigned long long serial{};
-    AudioPlaybackConnection connection{ nullptr };
+    enum class Stage { Started, Opened } stage;
+    bool success = false;
     std::wstring error;
+};
+
+struct PendingConnection {
+    unsigned long long serial{};
+    AudioPlaybackConnection connection{ nullptr };
 };
 
 struct StateEvent {
@@ -185,9 +190,8 @@ private:
     unsigned generation_ = 0;
     std::map<std::wstring, std::wstring> devices_;
     std::map<std::wstring, AudioPlaybackConnection> connections_;
-    std::map<std::wstring, unsigned long long> pending_;
+    std::map<std::wstring, PendingConnection> pending_;
     unsigned long long nextSerial_ = 0;
-    std::vector<std::thread> workers_;
     std::vector<std::wstring> restoreIds_;
     size_t restoreIndex_ = 0;
     std::wstring status_ = L"未连接";
@@ -223,15 +227,46 @@ private:
         case WM_CONNECT: {
             std::unique_ptr<ConnectEvent> event(reinterpret_cast<ConnectEvent*>(lparam));
             auto pending = pending_.find(event->id);
-            if (pending == pending_.end() || pending->second != event->serial) {
-                if (event->connection) { try { event->connection.Close(); } catch (...) {} }
-                return 0;
+            if (pending == pending_.end() || pending->second.serial != event->serial) return 0;
+            if (event->stage == ConnectEvent::Stage::Started && event->success) {
+                try {
+                    auto operation = pending->second.connection.OpenAsync();
+                    auto callbackWindow = callbackWindow_;
+                    auto id = event->id;
+                    auto serial = event->serial;
+                    operation.Completed([callbackWindow, id, serial](auto const& completed, auto) {
+                        auto resultEvent = std::make_unique<ConnectEvent>();
+                        resultEvent->id = id;
+                        resultEvent->serial = serial;
+                        resultEvent->stage = ConnectEvent::Stage::Opened;
+                        try {
+                            auto result = completed.GetResults();
+                            resultEvent->success = result.Status() == AudioPlaybackConnectionOpenResultStatus::Success;
+                            if (!resultEvent->success) {
+                                if (result.Status() == AudioPlaybackConnectionOpenResultStatus::RequestTimedOut)
+                                    resultEvent->error = L"连接请求超时";
+                                else if (result.Status() == AudioPlaybackConnectionOpenResultStatus::DeniedBySystem)
+                                    resultEvent->error = L"系统拒绝连接";
+                                else resultEvent->error = L"连接失败";
+                            }
+                        } catch (winrt::hresult_error const& error) {
+                            resultEvent->error = error.message().c_str();
+                        } catch (...) { resultEvent->error = L"连接失败"; }
+                        PostOwned(callbackWindow->load(), WM_CONNECT, resultEvent.release());
+                    });
+                    return 0;
+                } catch (winrt::hresult_error const& error) {
+                    event->error = error.message().c_str();
+                } catch (...) { event->error = L"连接失败"; }
+            }
+            if (event->stage == ConnectEvent::Stage::Opened && event->success) {
+                connections_.emplace(event->id, pending->second.connection);
+                status_ = L"已连接 " + DisplayName(event->id);
+            } else {
+                try { pending->second.connection.Close(); } catch (...) {}
+                status_ = event->error.empty() ? L"连接失败" : event->error;
             }
             pending_.erase(pending);
-            if (event->connection) {
-                connections_.emplace(event->id, event->connection);
-                status_ = L"已连接 " + DisplayName(event->id);
-            } else status_ = event->error.empty() ? L"连接失败" : event->error;
             Save();
             UpdateTip();
             if (restoreIndex_ < restoreIds_.size() && event->id == restoreIds_[restoreIndex_]) {
@@ -277,6 +312,28 @@ private:
         icon.uFlags = NIF_TIP;
         wcsncpy_s(icon.szTip, status_.c_str(), _TRUNCATE);
         Shell_NotifyIconW(NIM_MODIFY, &icon);
+        UpdateMenuState();
+    }
+
+    std::vector<int> MenuLights() const {
+        std::vector<int> lights;
+        for (auto const& [id, ignored] : connections_) lights.push_back(2);
+        for (auto const& [id, ignored] : pending_) lights.push_back(1);
+        for (auto const& [id, ignored] : devices_)
+            if (lights.size() < MAX_CONNECTIONS && !connections_.contains(id) && !pending_.contains(id))
+                lights.push_back(1);
+        return lights;
+    }
+
+    void UpdateMenuState() {
+        std::vector<bool> checked, enabled;
+        for (auto const& id : menuIds_) {
+            bool connected = connections_.contains(id);
+            checked.push_back(connected);
+            enabled.push_back(connected || (!pending_.contains(id) &&
+                connections_.size() + pending_.size() < MAX_CONNECTIONS));
+        }
+        trayMenu_.UpdateState(MenuLights(), std::move(checked), std::move(enabled));
     }
 
     void StartWatcher() {
@@ -324,41 +381,55 @@ private:
             return;
         }
         auto serial = ++nextSerial_;
-        pending_.emplace(id, serial);
         status_ = L"正在连接 " + DisplayName(id);
         UpdateTip();
-        auto callbackWindow = callbackWindow_;
-        workers_.emplace_back([id, serial, callbackWindow] {
-            auto event = std::make_unique<ConnectEvent>();
-            event->id = id;
-            event->serial = serial;
-            try {
-                init_apartment(apartment_type::multi_threaded);
-                auto connection = AudioPlaybackConnection::TryCreateFromId(hstring{ id });
-                if (!connection) event->error = L"系统无法创建音频连接";
-                else {
-                    connection.StateChanged([callbackWindow, id](AudioPlaybackConnection const& sender, winrt::Windows::Foundation::IInspectable const&) {
-                        try {
-                            PostOwned(callbackWindow->load(), WM_STATE, new StateEvent{ id, sender.State() });
-                        } catch (...) {}
-                    });
-                    connection.StartAsync().get();
-                    auto result = connection.OpenAsync().get();
-                    if (result.Status() == AudioPlaybackConnectionOpenResultStatus::Success)
-                        event->connection = connection;
-                    else if (result.Status() == AudioPlaybackConnectionOpenResultStatus::RequestTimedOut)
-                        event->error = L"连接请求超时";
-                    else if (result.Status() == AudioPlaybackConnectionOpenResultStatus::DeniedBySystem)
-                        event->error = L"系统拒绝连接";
-                    else event->error = L"连接失败";
-                }
-            } catch (...) { event->error = L"连接失败"; }
-            PostOwned(callbackWindow->load(), WM_CONNECT, event.release());
-        });
+        try {
+            auto connection = AudioPlaybackConnection::TryCreateFromId(hstring{ id });
+            if (!connection) {
+                status_ = L"系统无法创建音频连接";
+                UpdateTip();
+                return;
+            }
+            auto callbackWindow = callbackWindow_;
+            connection.StateChanged([callbackWindow, id](AudioPlaybackConnection const& sender, winrt::Windows::Foundation::IInspectable const&) {
+                try { PostOwned(callbackWindow->load(), WM_STATE, new StateEvent{ id, sender.State() }); }
+                catch (...) {}
+            });
+            pending_.emplace(id, PendingConnection{ serial, connection });
+            auto operation = connection.StartAsync();
+            operation.Completed([callbackWindow, id, serial](auto const& completed, auto) {
+                auto event = std::make_unique<ConnectEvent>();
+                event->id = id;
+                event->serial = serial;
+                event->stage = ConnectEvent::Stage::Started;
+                try {
+                    completed.GetResults();
+                    event->success = true;
+                } catch (winrt::hresult_error const& error) {
+                    event->error = error.message().c_str();
+                } catch (...) { event->error = L"连接失败"; }
+                PostOwned(callbackWindow->load(), WM_CONNECT, event.release());
+            });
+            UpdateMenuState();
+        } catch (winrt::hresult_error const& error) {
+            if (auto found = pending_.find(id); found != pending_.end()) {
+                try { found->second.connection.Close(); } catch (...) {}
+                pending_.erase(found);
+            }
+            status_ = error.message().c_str();
+            UpdateTip();
+        } catch (...) {
+            pending_.erase(id);
+            status_ = L"连接失败";
+            UpdateTip();
+        }
     }
 
     void Disconnect(std::wstring const& id) {
-        pending_.erase(id);
+        if (auto pending = pending_.find(id); pending != pending_.end()) {
+            try { pending->second.connection.Close(); } catch (...) {}
+            pending_.erase(pending);
+        }
         auto found = connections_.find(id);
         if (found != connections_.end()) {
             try { found->second.Close(); } catch (...) {}
@@ -373,6 +444,7 @@ private:
         restoreIds_.clear();
         auto ids = connections_;
         for (auto const& [id, ignored] : ids) Disconnect(id);
+        for (auto const& [id, pending] : pending_) { try { pending.connection.Close(); } catch (...) {} }
         pending_.clear();
         Save();
     }
@@ -404,11 +476,7 @@ private:
         if (deviceEntries.empty()) deviceEntries.push_back({ TrayMenu::Kind::Item,
             L"未发现 A2DP 设备", 0, false });
         TrayMenu::Entry status{ TrayMenu::Kind::Status };
-        for (auto const& [id, ignored] : connections_) status.lights.push_back(2);
-        for (auto const& [id, ignored] : pending_) status.lights.push_back(1);
-        for (auto const& [id, ignored] : devices_)
-            if (status.lights.size() < MAX_CONNECTIONS && !connections_.contains(id) && !pending_.contains(id))
-                status.lights.push_back(1);
+        status.lights = MenuLights();
         bool startup = StartupEnabled();
         std::vector<TrayMenu::Entry> mainEntries;
         mainEntries.push_back(std::move(status));
@@ -454,7 +522,8 @@ private:
         KillTimer(window_, 1);
         ++generation_;
         if (watcher_) { try { watcher_.Stop(); } catch (...) {} watcher_ = nullptr; }
-        for (auto& worker : workers_) if (worker.joinable()) worker.join();
+        for (auto const& [id, pending] : pending_) { try { pending.connection.Close(); } catch (...) {} }
+        pending_.clear();
         for (auto const& [id, connection] : connections_) { try { connection.Close(); } catch (...) {} }
         connections_.clear();
         NOTIFYICONDATAW icon{ sizeof(icon) };

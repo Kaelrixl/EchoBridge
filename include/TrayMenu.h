@@ -102,6 +102,19 @@ public:
         if (window_) DestroyWindow(window_);
     }
 
+    void UpdateState(std::vector<int> lights, std::vector<bool> checked,
+        std::vector<bool> enabled) {
+        if (!window_) return;
+        for (auto& entry : main_)
+            if (entry.kind == Kind::Status) { entry.lights = std::move(lights); break; }
+        for (size_t index = 0; index < devices_.size() && index < checked.size(); ++index) {
+            devices_[index].checked = checked[index];
+            devices_[index].enabled = enabled[index];
+        }
+        RenderMain();
+        if (submenuOpen_) RenderSubmenu();
+    }
+
 private:
     int rootWidth_ = 148;
     int rowHeight_ = 22;
@@ -446,10 +459,16 @@ private:
         }
     }
 
-    void Activate(Entry const& entry) {
+    void Activate(Entry const& entry, bool device = false) {
         if (!entry.enabled || !entry.command) return;
         UINT command = entry.command;
-        Close();
+        if (device) {
+            submenuOpen_ = false;
+            selectedDevice_ = -1;
+            UpdateSubmenu();
+        } else {
+            Close();
+        }
         if (onCommand_) onCommand_(command);
     }
 
@@ -465,7 +484,7 @@ private:
             return;
         }
         if (key == VK_RETURN) {
-            if (submenuOpen_ && selectedDevice_ >= 0) Activate(devices_[selectedDevice_]);
+            if (submenuOpen_ && selectedDevice_ >= 0) Activate(devices_[selectedDevice_], true);
             else if (selectedMain_ >= 0) Activate(main_[selectedMain_]);
             return;
         }
@@ -512,7 +531,7 @@ private:
             int x = GET_X_LPARAM(lparam), y = GET_Y_LPARAM(lparam);
             if (window == self->submenuWindow_) {
                 int device = self->HitDevice(x, y);
-                if (device >= 0) self->Activate(self->devices_[device]);
+                if (device >= 0) self->Activate(self->devices_[device], true);
             } else {
                 int main = self->HitMain(x, y);
                 if (main >= 0) self->Activate(self->main_[main]);
