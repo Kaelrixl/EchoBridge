@@ -98,6 +98,11 @@ public:
     }
 
     void Close() {
+        if (mouseHook_) {
+            UnhookWindowsHookEx(mouseHook_);
+            mouseHook_ = nullptr;
+            activeHookMenu_ = nullptr;
+        }
         if (submenuWindow_) DestroyWindow(submenuWindow_);
         if (window_) DestroyWindow(window_);
     }
@@ -127,6 +132,9 @@ private:
     HWND owner_{};
     HWND window_{};
     HWND submenuWindow_{};
+    HHOOK mouseHook_{};
+    inline static TrayMenu* activeHookMenu_ = nullptr;
+    static constexpr UINT WM_CLOSE_OUTSIDE = WM_APP + 10;
     HFONT font_{};
     ULONG_PTR gdiplusToken_{};
     std::vector<Entry> main_;
@@ -468,10 +476,29 @@ private:
             UpdateSubmenu();
             SetForegroundWindow(window_);
             SetFocus(window_);
+            activeHookMenu_ = this;
+            if (!mouseHook_)
+                mouseHook_ = SetWindowsHookExW(WH_MOUSE_LL, MouseHook, instance_, 0);
         } else {
             Close();
         }
         if (onCommand_) onCommand_(command);
+    }
+
+    static LRESULT CALLBACK MouseHook(int code, WPARAM wparam, LPARAM lparam) {
+        if (code == HC_ACTION && activeHookMenu_ &&
+            (wparam == WM_LBUTTONDOWN || wparam == WM_RBUTTONDOWN)) {
+            auto* point = reinterpret_cast<MSLLHOOKSTRUCT const*>(lparam);
+            RECT main{};
+            RECT submenu{};
+            bool insideMain = activeHookMenu_->window_ &&
+                GetWindowRect(activeHookMenu_->window_, &main) && PtInRect(&main, point->pt);
+            bool insideSubmenu = activeHookMenu_->submenuWindow_ &&
+                GetWindowRect(activeHookMenu_->submenuWindow_, &submenu) && PtInRect(&submenu, point->pt);
+            if (!insideMain && !insideSubmenu)
+                PostMessageW(activeHookMenu_->window_, WM_CLOSE_OUTSIDE, 0, 0);
+        }
+        return CallNextHookEx(nullptr, code, wparam, lparam);
     }
 
     void KeyDown(WPARAM key) {
@@ -541,6 +568,7 @@ private:
             return 0;
         }
         case WM_RBUTTONUP: self->Close(); return 0;
+        case WM_CLOSE_OUTSIDE: self->Close(); return 0;
         case WM_KEYDOWN: self->KeyDown(wparam); return 0;
         case WM_ACTIVATE:
             if (LOWORD(wparam) == WA_INACTIVE) {
