@@ -58,6 +58,7 @@ struct PendingConnection {
 
 struct StateEvent {
     std::wstring id;
+    unsigned long long serial{};
     AudioPlaybackConnectionState state;
 };
 
@@ -191,6 +192,9 @@ private:
     std::map<std::wstring, std::wstring> devices_;
     std::map<std::wstring, AudioPlaybackConnection> connections_;
     std::map<std::wstring, PendingConnection> pending_;
+    std::map<std::wstring, unsigned long long> activeSerials_;
+    std::map<std::wstring, unsigned long long> closedCandidates_;
+    std::vector<std::wstring> connectionOrder_;
     unsigned long long nextSerial_ = 0;
     std::vector<std::wstring> restoreIds_;
     size_t restoreIndex_ = 0;
@@ -261,6 +265,8 @@ private:
             }
             if (event->stage == ConnectEvent::Stage::Opened && event->success) {
                 connections_.emplace(event->id, pending->second.connection);
+                activeSerials_[event->id] = event->serial;
+                connectionOrder_.push_back(event->id);
                 status_ = L"已连接 " + DisplayName(event->id);
             } else {
                 try { pending->second.connection.Close(); } catch (...) {}
@@ -269,20 +275,30 @@ private:
             pending_.erase(pending);
             // Restoring a saved device must not replace the full saved list with
             // the devices that have completed so far (or drop a failed device).
-            bool restoring = restoreIndex_ < restoreIds_.size() && event->id == restoreIds_[restoreIndex_];
+            bool restoring = IsRestoring(event->id);
             if (!restoring) Save();
             UpdateTip();
-            if (restoring) {
-                ++restoreIndex_;
-                if (restoreIndex_ < restoreIds_.size()) SetTimer(window_, 1, 1500, nullptr);
-            }
+            if (restoring) AdvanceRestore(event->id);
             return 0;
         }
         case WM_STATE: {
             std::unique_ptr<StateEvent> event(reinterpret_cast<StateEvent*>(lparam));
-            if (connections_.contains(event->id) && event->state == AudioPlaybackConnectionState::Opened) {
+            auto active = activeSerials_.find(event->id);
+            if (active == activeSerials_.end() || active->second != event->serial) return 0;
+            auto connection = connections_.find(event->id);
+            if (connection == connections_.end()) return 0;
+            AudioPlaybackConnectionState current;
+            try { current = connection->second.State(); } catch (...) { return 0; }
+            if (current != event->state) return 0;
+            if (current == AudioPlaybackConnectionState::Opened) {
+                closedCandidates_.erase(event->id);
+                if (closedCandidates_.empty()) KillTimer(window_, 2);
                 status_ = L"已连接";
                 UpdateTip();
+            } else if (current == AudioPlaybackConnectionState::Closed) {
+                closedCandidates_[event->id] = event->serial;
+                KillTimer(window_, 2);
+                SetTimer(window_, 2, 3000, nullptr);
             }
             return 0;
         }
@@ -290,6 +306,24 @@ private:
             if (wparam == 1) {
                 KillTimer(window_, 1);
                 if (restoreIndex_ < restoreIds_.size()) Connect(restoreIds_[restoreIndex_]);
+            } else if (wparam == 2) {
+                KillTimer(window_, 2);
+                auto candidates = std::move(closedCandidates_);
+                closedCandidates_.clear();
+                for (auto const& [id, serial] : candidates) {
+                    auto active = activeSerials_.find(id);
+                    auto connection = connections_.find(id);
+                    if (active == activeSerials_.end() || active->second != serial || connection == connections_.end()) continue;
+                    try {
+                        if (connection->second.State() != AudioPlaybackConnectionState::Closed) continue;
+                    } catch (...) { continue; }
+                    activeSerials_.erase(active);
+                    try { connection->second.Close(); } catch (...) {}
+                    connections_.erase(connection);
+                    std::erase(connectionOrder_, id);
+                    status_ = L"连接已断开 " + DisplayName(id);
+                }
+                UpdateTip();
             }
             return 0;
         case WM_COMMAND:
@@ -376,11 +410,24 @@ private:
         StartWatcher();
     }
 
+    bool IsRestoring(std::wstring const& id) const {
+        return restoreIndex_ < restoreIds_.size() && id == restoreIds_[restoreIndex_];
+    }
+
+    void AdvanceRestore(std::wstring const& id) {
+        if (!IsRestoring(id)) return;
+        ++restoreIndex_;
+        if (restoreIndex_ < restoreIds_.size()) SetTimer(window_, 1, 1500, nullptr);
+        else { restoreIds_.clear(); restoreIndex_ = 0; }
+    }
+
     void Connect(std::wstring const& id) {
-        if (connections_.contains(id) || pending_.contains(id)) return;
+        if (connections_.contains(id)) { AdvanceRestore(id); return; }
+        if (pending_.contains(id)) return;
         if (connections_.size() + pending_.size() >= MAX_CONNECTIONS) {
             status_ = L"最多同时连接 4 台设备";
             UpdateTip();
+            AdvanceRestore(id);
             return;
         }
         auto serial = ++nextSerial_;
@@ -391,11 +438,12 @@ private:
             if (!connection) {
                 status_ = L"系统无法创建音频连接";
                 UpdateTip();
+                AdvanceRestore(id);
                 return;
             }
             auto callbackWindow = callbackWindow_;
-            connection.StateChanged([callbackWindow, id](AudioPlaybackConnection const& sender, winrt::Windows::Foundation::IInspectable const&) {
-                try { PostOwned(callbackWindow->load(), WM_STATE, new StateEvent{ id, sender.State() }); }
+            connection.StateChanged([callbackWindow, id, serial](AudioPlaybackConnection const& sender, winrt::Windows::Foundation::IInspectable const&) {
+                try { PostOwned(callbackWindow->load(), WM_STATE, new StateEvent{ id, serial, sender.State() }); }
                 catch (...) {}
             });
             pending_.emplace(id, PendingConnection{ serial, connection });
@@ -421,10 +469,12 @@ private:
             }
             status_ = error.message().c_str();
             UpdateTip();
+            AdvanceRestore(id);
         } catch (...) {
             pending_.erase(id);
             status_ = L"连接失败";
             UpdateTip();
+            AdvanceRestore(id);
         }
     }
 
@@ -435,8 +485,12 @@ private:
         }
         auto found = connections_.find(id);
         if (found != connections_.end()) {
+            activeSerials_.erase(id);
+            closedCandidates_.erase(id);
+            if (closedCandidates_.empty()) KillTimer(window_, 2);
             try { found->second.Close(); } catch (...) {}
             connections_.erase(found);
+            std::erase(connectionOrder_, id);
         }
         status_ = connections_.empty() ? L"未连接" : L"已连接";
         UpdateTip();
@@ -454,7 +508,8 @@ private:
 
     void Save() {
         settings_.lastIds.clear();
-        for (auto const& [id, ignored] : connections_) settings_.lastIds.push_back(id);
+        for (auto const& id : connectionOrder_)
+            if (connections_.contains(id)) settings_.lastIds.push_back(id);
         SaveSettings(settings_);
     }
 
@@ -523,6 +578,7 @@ private:
         trayMenu_.Close();
         callbackWindow_->store(nullptr);
         KillTimer(window_, 1);
+        KillTimer(window_, 2);
         ++generation_;
         if (watcher_) { try { watcher_.Stop(); } catch (...) {} watcher_ = nullptr; }
         for (auto const& [id, pending] : pending_) { try { pending.connection.Close(); } catch (...) {} }
