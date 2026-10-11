@@ -266,8 +266,18 @@ private:
             if (event->stage == ConnectEvent::Stage::Opened && event->success) {
                 connections_.emplace(event->id, pending->second.connection);
                 activeSerials_[event->id] = event->serial;
-                connectionOrder_.push_back(event->id);
+                auto position = std::find_if(connectionOrder_.begin(), connectionOrder_.end(), [this, eventSerial = event->serial](auto const& id) {
+                    return activeSerials_.at(id) > eventSerial;
+                });
+                connectionOrder_.insert(position, event->id);
                 status_ = L"已连接 " + DisplayName(event->id);
+                try {
+                    if (pending->second.connection.State() == AudioPlaybackConnectionState::Closed) {
+                        closedCandidates_[event->id] = event->serial;
+                        KillTimer(window_, 2);
+                        SetTimer(window_, 2, 3000, nullptr);
+                    }
+                } catch (...) {}
             } else {
                 try { pending->second.connection.Close(); } catch (...) {}
                 status_ = event->error.empty() ? L"连接失败" : event->error;
