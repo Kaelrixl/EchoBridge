@@ -165,12 +165,7 @@ private:
         mainOriginX_ = submenuOpen_ && submenuLeft_ ? subWidth - overlap_ : 0;
         submenuOriginX_ = submenuLeft_ ? 0 : rootWidth_ - overlap_;
         submenuOriginY_ = DevicesTop();
-        int x = rootX_ - mainOriginX_;
-        int width = rootWidth_ + (submenuOpen_ ? subWidth - overlap_ : 0);
-        int height = submenuOpen_ ? std::max(RootHeight(), submenuOriginY_ + SubmenuHeight()) : RootHeight();
-        SetWindowPos(window_, HWND_TOPMOST, x, rootY_, width, height,
-            SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-        InvalidateRect(window_, nullptr, FALSE);
+        Render();
     }
 
     static float RoundedCoverage(float px, float py, float x, float y,
@@ -317,17 +312,18 @@ private:
         Outline(dc, panel, RGB(218, 218, 218), 7);
     }
 
-    void Paint() {
-        PAINTSTRUCT paint{};
-        BeginPaint(window_, &paint);
-        RECT bounds{};
-        GetClientRect(window_, &bounds);
+    void Render() {
+        if (!window_) return;
+        int subWidth = SubmenuWidth();
+        int width = rootWidth_ + (submenuOpen_ ? subWidth - overlap_ : 0);
+        int height = submenuOpen_ ? std::max(RootHeight(), submenuOriginY_ + SubmenuHeight()) : RootHeight();
+        RECT bounds{ 0, 0, width, height };
         HDC screen = GetDC(nullptr);
         HDC buffer = CreateCompatibleDC(screen);
         BITMAPINFO info{};
         info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        info.bmiHeader.biWidth = bounds.right;
-        info.bmiHeader.biHeight = -bounds.bottom;
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = -height;
         info.bmiHeader.biPlanes = 1;
         info.bmiHeader.biBitCount = 32;
         info.bmiHeader.biCompression = BI_RGB;
@@ -337,20 +333,17 @@ private:
             if (bitmap) DeleteObject(bitmap);
             if (buffer) DeleteDC(buffer);
             ReleaseDC(nullptr, screen);
-            EndPaint(window_, &paint);
             return;
         }
         HGDIOBJ oldBitmap = SelectObject(buffer, bitmap);
         Fill(buffer, bounds, RGB(250, 250, 250));
         DrawPanel(buffer, mainOriginX_, 0, rootWidth_, main_, selectedMain_, true);
         if (submenuOpen_) DrawPanel(buffer, submenuOriginX_, submenuOriginY_,
-            SubmenuWidth(), devices_, selectedDevice_, false);
-        ApplyRoundedAlpha(pixels, bounds.right, bounds.bottom);
-        RECT placement{};
-        GetWindowRect(window_, &placement);
-        POINT destination{ placement.left, placement.top };
+            subWidth, devices_, selectedDevice_, false);
+        ApplyRoundedAlpha(pixels, width, height);
+        POINT destination{ rootX_ - mainOriginX_, rootY_ };
         POINT source{ 0, 0 };
-        SIZE size{ bounds.right, bounds.bottom };
+        SIZE size{ width, height };
         BLENDFUNCTION blend{ AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
         UpdateLayeredWindow(window_, screen, &destination, &size, buffer, &source,
             0, &blend, ULW_ALPHA);
@@ -358,7 +351,6 @@ private:
         DeleteObject(bitmap);
         DeleteDC(buffer);
         ReleaseDC(nullptr, screen);
-        EndPaint(window_, &paint);
     }
 
     int HitMain(int x, int y) const {
@@ -382,7 +374,7 @@ private:
     void MouseMove(int x, int y) {
         int device = HitDevice(x, y);
         if (device >= 0) {
-            if (selectedDevice_ != device) { selectedDevice_ = device; InvalidateRect(window_, nullptr, FALSE); }
+            if (selectedDevice_ != device) { selectedDevice_ = device; Render(); }
             return;
         }
         int main = HitMain(x, y);
@@ -441,7 +433,7 @@ private:
                 }
             }
         }
-        InvalidateRect(window_, nullptr, FALSE);
+        Render();
     }
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -453,7 +445,7 @@ private:
         }
         if (!self) return DefWindowProcW(window, message, wparam, lparam);
         switch (message) {
-        case WM_PAINT: self->Paint(); return 0;
+        case WM_PAINT: ValidateRect(window, nullptr); return 0;
         case WM_MOUSEMOVE: self->MouseMove(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)); return 0;
         case WM_LBUTTONUP: {
             int x = GET_X_LPARAM(lparam), y = GET_Y_LPARAM(lparam);
