@@ -267,9 +267,12 @@ private:
                 status_ = event->error.empty() ? L"连接失败" : event->error;
             }
             pending_.erase(pending);
-            Save();
+            // Restoring a saved device must not replace the full saved list with
+            // the devices that have completed so far (or drop a failed device).
+            bool restoring = restoreIndex_ < restoreIds_.size() && event->id == restoreIds_[restoreIndex_];
+            if (!restoring) Save();
             UpdateTip();
-            if (restoreIndex_ < restoreIds_.size() && event->id == restoreIds_[restoreIndex_]) {
+            if (restoring) {
                 ++restoreIndex_;
                 if (restoreIndex_ < restoreIds_.size()) SetTimer(window_, 1, 1500, nullptr);
             }
@@ -507,12 +510,12 @@ private:
         switch (command) {
         case ID_REFRESH: Refresh(); break;
         case ID_DISCONNECT_ALL: DisconnectAll(); break;
-        case ID_RECONNECT: settings_.reconnect = !settings_.reconnect; Save(); break;
+        case ID_RECONNECT: settings_.reconnect = !settings_.reconnect; SaveSettings(settings_); break;
         case ID_STARTUP:
-            if (SetStartup(!StartupEnabled())) { settings_.startup = StartupEnabled(); Save(); }
+            if (SetStartup(!StartupEnabled())) { settings_.startup = StartupEnabled(); SaveSettings(settings_); }
             break;
         case ID_BLUETOOTH: ShellExecuteW(window_, L"open", L"ms-settings:bluetooth", nullptr, nullptr, SW_SHOWNORMAL); break;
-        case ID_EXIT: Save(); DestroyWindow(window_); break;
+        case ID_EXIT: SaveSettings(settings_); DestroyWindow(window_); break;
         }
     }
 
