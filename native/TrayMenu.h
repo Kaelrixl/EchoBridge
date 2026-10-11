@@ -175,7 +175,7 @@ private:
 
     static float RoundedCoverage(float px, float py, float x, float y,
         float width, float height) {
-        constexpr float radius = 5.5f;
+        constexpr float radius = 11.0f;
         if (px < x || py < y || px >= x + width || py >= y + height) return 0.0f;
         float cx = std::clamp(px, x + radius, x + width - radius);
         float cy = std::clamp(py, y + radius, y + height - radius);
@@ -185,7 +185,7 @@ private:
 
     void ApplyRoundedAlpha(void* pixels, int width, int height) const {
         auto* argb = static_cast<UINT32*>(pixels);
-        constexpr int samples = 4;
+        constexpr int samples = 8;
         const float rootHeight = static_cast<float>(RootHeight());
         const float subWidth = submenuOpen_ ? static_cast<float>(SubmenuWidth()) : 0.0f;
         const float subHeight = submenuOpen_ ? static_cast<float>(SubmenuHeight()) : 0.0f;
@@ -314,7 +314,7 @@ private:
             top += row;
         }
         if (oldFont) SelectObject(dc, oldFont);
-        Outline(dc, panel, RGB(218, 218, 218), 5);
+        Outline(dc, panel, RGB(218, 218, 218), 11);
     }
 
     void Paint() {
